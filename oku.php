@@ -149,9 +149,9 @@ if ($kitap_bitis_sayfa < 1) {
     </div>
     
     <div class="controls">
-        <button class="btn btn-start" id="startBtn">▶ Başla</button>
-        <button class="btn btn-pause" id="pauseBtn">⏸ Duraklat</button>
-        <button class="btn btn-stop" id="stopBtn">⏹ Seansı Bitir</button>
+        <button type="button" class="btn btn-start" id="startBtn">▶ Başla</button>
+        <button type="button" class="btn btn-pause" id="pauseBtn">⏸ Duraklat</button>
+        <button type="button" class="btn btn-stop" id="stopBtn">⏹ Seansı Bitir</button>
     </div>
     
     <div style="width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box;">
@@ -321,8 +321,9 @@ if ($kitap_bitis_sayfa < 1) {
 
     function pauseTimer() {
         if (isRunning) {
+            var elapsed = getCurrentSeconds();
             isRunning = false;
-            pausedAccumulatedSeconds = getCurrentSeconds();
+            pausedAccumulatedSeconds = elapsed;
             startTime = null;
             clearInterval(timerInterval);
             releaseWakeLock();
@@ -348,7 +349,7 @@ if ($kitap_bitis_sayfa < 1) {
             alert("Seans çok kısa! Kaydetmek için en az 10 saniye okumalısınız.");
             return;
         }
-        formSureSaniye.value = sec;
+        formSureSaniye.value = String(Math.floor(sec));
         endModal.style.display = 'flex';
         bitisSayfasiInput.focus();
     });
