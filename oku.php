@@ -97,8 +97,11 @@ if ($kitap_bitis_sayfa < 1) {
         .top-bar p { margin: 0.2rem 0 0 0; font-size: 0.9rem; color: #9ca3af; }
         
         .timer-container { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        .timer { font-size: 5rem; font-weight: bold; font-variant-numeric: tabular-nums; letter-spacing: 2px; margin-bottom: 2rem; color: #ffffff; text-shadow: 0 0 20px rgba(96, 165, 250, 0.3); }
-        @media (max-width: 500px) { .timer { font-size: 4rem; } }
+        .timer-row { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-bottom: 2rem; }
+        .timer { font-size: 5rem; font-weight: bold; font-variant-numeric: tabular-nums; letter-spacing: 2px; color: #ffffff; text-shadow: 0 0 20px rgba(96, 165, 250, 0.3); }
+        .timer-label { font-size: 0.85rem; color: #9ca3af; }
+        .clock { font-size: 1.75rem; font-variant-numeric: tabular-nums; color: #60a5fa; letter-spacing: 1px; }
+        @media (max-width: 500px) { .timer { font-size: 4rem; } .clock { font-size: 1.5rem; } }
         
         .controls { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box; }
         .btn { flex: 1; padding: 1.2rem; border: none; border-radius: 8px; font-size: 1.2rem; font-weight: bold; cursor: pointer; color: white; transition: transform 0.1s; }
@@ -107,6 +110,8 @@ if ($kitap_bitis_sayfa < 1) {
         .btn-pause { background-color: #f59e0b; display: none; }
         .btn-stop { background-color: #ef4444; width: 100%; margin-top: 1rem; flex: none; }
         .btn-cancel { background-color: #4b5563; text-decoration: none; display: block; text-align: center; margin-top: 1rem; font-size: 1rem; padding: 1rem; border-radius: 8px; }
+        .btn-reset { background-color: #6b7280; width: 100%; margin-top: 0.5rem; flex: none; display: none; }
+        .btn-reset.visible { display: block; }
         
         /* Modal (Popup) Stilleri */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 1000; }
@@ -136,7 +141,12 @@ if ($kitap_bitis_sayfa < 1) {
 
 <div class="timer-container">
     <div class="status-text" id="statusText">Seansı başlatmak için Dokunun</div>
-    <div class="timer" id="display">00:00:00</div>
+    <div class="timer-row">
+        <span class="timer-label">Geçen süre</span>
+        <div class="timer" id="display">00:00:00</div>
+        <span class="timer-label">Güncel saat</span>
+        <div class="clock" id="clock">--:--:--</div>
+    </div>
     
     <div class="controls">
         <button class="btn btn-start" id="startBtn">▶ Başla</button>
@@ -145,6 +155,7 @@ if ($kitap_bitis_sayfa < 1) {
     </div>
     
     <div style="width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box;">
+        <button type="button" class="btn btn-reset" id="resetBtn">Yeni seans başlat</button>
         <a href="index.php" class="btn-cancel" onclick="return confirmExit();">Vazgeç ve Çık</a>
     </div>
 </div>
@@ -181,6 +192,7 @@ if ($kitap_bitis_sayfa < 1) {
 
     // Arayüz Elementleri
     const display = document.getElementById('display');
+    const clockEl = document.getElementById('clock');
     const startBtn = document.getElementById('startBtn');
     const pauseBtn = document.getElementById('pauseBtn');
     const stopBtn = document.getElementById('stopBtn');
@@ -191,90 +203,153 @@ if ($kitap_bitis_sayfa < 1) {
     const formSureSaniye = document.getElementById('formSureSaniye');
     const bitisSayfasiInput = document.getElementById('bitis_sayfasi');
     const kitapBitisSayfa = <?= $kitap_bitis_sayfa ?>;
+    const resetBtn = document.getElementById('resetBtn');
 
-    // Zaman Değişkenleri
-    let seconds = 0;
+    // Zaman: gerçek süre için zaman damgası (mobil ekran kapalıyken doğru sayar)
+    let startTime = null;           // Şu anki parçanın başlangıcı (ms)
+    let pausedAccumulatedSeconds = 0;
     let timerInterval = null;
     let isRunning = false;
+    let wakeLock = null;
 
-    // --- 1. LOCAL STORAGE KURTARMA SİSTEMİ ---
+    function getCurrentSeconds() {
+        if (!isRunning || startTime === null) return pausedAccumulatedSeconds;
+        return pausedAccumulatedSeconds + Math.floor((Date.now() - startTime) / 1000);
+    }
+
+    // --- 1. LOCAL STORAGE ---
     function loadFromStorage() {
         const savedData = localStorage.getItem(storageKey);
         if (savedData) {
             const data = JSON.parse(savedData);
-            seconds = data.seconds || 0;
+            pausedAccumulatedSeconds = data.seconds || 0;
             updateDisplay();
-            
-            if (seconds > 0) {
+            updateClock();
+            if (pausedAccumulatedSeconds > 0) {
                 statusText.innerText = "Yarım kalan seans bulundu.";
                 statusText.style.color = "#f59e0b";
+                resetBtn.classList.add('visible');
             }
+        } else {
+            updateClock();
         }
     }
 
-    function saveToStorage() {
-        const data = { seconds: seconds };
-        localStorage.setItem(storageKey, JSON.stringify(data));
+    function resetSession() {
+        if (!confirm("Yarım kalan seans silinecek. Sıfırdan yeni seans başlatmak istiyor musunuz?")) return;
+        localStorage.removeItem(storageKey);
+        pausedAccumulatedSeconds = 0;
+        startTime = null;
+        updateDisplay();
+        statusText.innerText = "Seansı başlatmak için Dokunun";
+        statusText.style.color = "#10b981";
+        startBtn.innerText = "▶ Başla";
+        resetBtn.classList.remove('visible');
     }
 
-    // --- 2. KRONOMETRE FONKSİYONLARI ---
+    function saveToStorage() {
+        const sec = getCurrentSeconds();
+        localStorage.setItem(storageKey, JSON.stringify({ seconds: sec }));
+    }
+
+    // --- 2. KRONOMETRE (zaman damgası tabanlı) ---
+    function formatDuration(seconds) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        return (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+
     function updateDisplay() {
-        let h = Math.floor(seconds / 3600);
-        let m = Math.floor((seconds % 3600) / 60);
-        let s = seconds % 60;
-        
-        let formatted = 
-            (h < 10 ? "0" + h : h) + ":" + 
-            (m < 10 ? "0" + m : m) + ":" + 
-            (s < 10 ? "0" + s : s);
-            
+        const sec = getCurrentSeconds();
+        const formatted = formatDuration(sec);
         display.innerText = formatted;
         document.title = formatted + " - Okunuyor...";
     }
 
+    function updateClock() {
+        const now = new Date();
+        const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+        clockEl.textContent = (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+
+    function tick() {
+        updateDisplay();
+        updateClock();
+        if (getCurrentSeconds() % 3 === 0) saveToStorage();
+    }
+
+    // --- 3. WAKE LOCK (ekran açık kalsın) ---
+    async function requestWakeLock() {
+        if (!navigator.wakeLock) return;
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+        } catch (e) {
+            console.warn("Wake Lock alınamadı:", e);
+        }
+    }
+
+    function releaseWakeLock() {
+        if (wakeLock) {
+            wakeLock.release().catch(() => {});
+            wakeLock = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            updateDisplay();
+            updateClock();
+            if (isRunning) requestWakeLock();
+        }
+    });
+
     function startTimer() {
         if (!isRunning) {
             isRunning = true;
+            startTime = Date.now();
             startBtn.style.display = 'none';
             pauseBtn.style.display = 'block';
             statusText.innerText = "Okuma devam ediyor...";
             statusText.style.color = "#10b981";
-            
-            // Her saniye sayacı artır
-            timerInterval = setInterval(() => {
-                seconds++;
-                updateDisplay();
-                // Her 3 saniyede bir LocalStorage'a yedekle
-                if(seconds % 3 === 0) saveToStorage(); 
-            }, 1000);
+            requestWakeLock();
+            timerInterval = setInterval(tick, 1000);
+            resetBtn.classList.remove('visible');
         }
     }
 
     function pauseTimer() {
         if (isRunning) {
             isRunning = false;
+            pausedAccumulatedSeconds = getCurrentSeconds();
+            startTime = null;
             clearInterval(timerInterval);
+            releaseWakeLock();
             pauseBtn.style.display = 'none';
             startBtn.style.display = 'block';
             startBtn.innerText = "▶ Devam Et";
             statusText.innerText = "Duraklatıldı";
             statusText.style.color = "#f59e0b";
+            updateDisplay();
             saveToStorage();
+            resetBtn.classList.add('visible');
         }
     }
 
-    // --- 3. EVENT LİSTENER'LAR ---
+    // --- 4. EVENT LİSTENER'LAR ---
     startBtn.addEventListener('click', startTimer);
     pauseBtn.addEventListener('click', pauseTimer);
 
     stopBtn.addEventListener('click', () => {
-        pauseTimer(); // Sayacı durdur
-        if (seconds < 10) {
+        pauseTimer();
+        const sec = getCurrentSeconds();
+        if (sec < 10) {
             alert("Seans çok kısa! Kaydetmek için en az 10 saniye okumalısınız.");
             return;
         }
-        formSureSaniye.value = seconds; // Gizli inputa saniyeyi yaz
-        endModal.style.display = 'flex'; // Modalı aç
+        formSureSaniye.value = sec;
+        endModal.style.display = 'flex';
         bitisSayfasiInput.focus();
     });
 
@@ -286,28 +361,30 @@ if ($kitap_bitis_sayfa < 1) {
         bitisSayfasiInput.value = kitapBitisSayfa;
     });
 
-    // Form başarıyla gönderildiğinde LocalStorage'ı temizle
+    resetBtn.addEventListener('click', resetSession);
+
     saveForm.addEventListener('submit', () => {
         localStorage.removeItem(storageKey);
+        releaseWakeLock();
+        resetBtn.classList.remove('visible');
     });
 
-    // Sayfadan yanlışlıkla çıkmayı önleyen uyarı
     function confirmExit() {
-        if (seconds > 0) {
+        if (getCurrentSeconds() > 0) {
             return confirm("Kaydedilmemiş okuma süreniz var. Çıkmak istediğinize emin misiniz?");
         }
         return true;
     }
 
-    // --- 4. HEARTBEAT (Session Düşmesini Önleme) ---
-    // Her 10 dakikada (600.000 ms) bir arka planda sunucuya istek atar
+    // --- 5. HEARTBEAT ---
     setInterval(() => {
         fetch('oku.php?ping=1').catch(err => console.error("Heartbeat hatası", err));
     }, 600000);
 
-    // Sayfa yüklendiğinde hafızadan veriyi çek
-    window.onload = loadFromStorage;
-
+    window.onload = () => {
+        loadFromStorage();
+        setInterval(updateClock, 1000);
+    };
 </script>
 
 </body>
