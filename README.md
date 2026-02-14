@@ -40,7 +40,7 @@ Arayüz Türkçe’dir.
 ### 1. Projeyi indirin
 
 ```bash
-git clone https://github.com/KULLANICI_ADI/reading.git
+git clone https://github.com/emrahsongur/readingapp.git
 cd reading
 ```
 
