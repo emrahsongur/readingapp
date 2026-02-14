@@ -22,7 +22,7 @@ $user_id = $_SESSION['user_id'];
 try {
     $stmt = $pdo->prepare("
         SELECT k.*, d.durum as durum_adi,
-               o.ilk_baslama, o.son_sayfa, o.toplam_saniye, o.son_seans_baslama,
+               o.ilk_baslama, o.son_sayfa, o.toplam_saniye, o.son_seans_baslama, o.toplam_okunan_sayfa,
                COALESCE(al.alinti_sayisi, 0) as alinti_sayisi,
                COALESCE(du.dusunce_sayisi, 0) as dusunce_sayisi
         FROM kitaplar k
@@ -32,7 +32,8 @@ try {
                    MIN(baslama) as ilk_baslama,
                    MAX(bitis_sayfasi) as son_sayfa,
                    SUM(sure_saniye) as toplam_saniye,
-                   MAX(baslama) as son_seans_baslama
+                   MAX(baslama) as son_seans_baslama,
+                   SUM(GREATEST(0, COALESCE(bitis_sayfasi, baslama_sayfasi) - baslama_sayfasi + 1)) as toplam_okunan_sayfa
             FROM okumalar
             WHERE user_id = :user_id
             GROUP BY book_id
@@ -261,6 +262,28 @@ function sure_format_ssddss($saniye) {
             border-radius: 3px;
             transition: width 0.2s;
         }
+        .tahmini-kalan {
+            background-color: #1e40af;
+            color: white;
+            padding: 0.5rem 0.6rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            font-size: 0.8rem;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+        }
+        .tahmini-kalan strong { font-weight: 700; }
+        .toplam-kalan-wrap {
+            margin-top: 1.5rem;
+            padding: 0.75rem 1rem;
+            background-color:rgb(146, 146, 146);
+            color: white;
+            border-radius: 8px;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        .toplam-kalan-label { font-size: 0.9rem; margin-right: 0.5rem; }
+        .toplam-kalan-sure { font-size: 1.1rem; font-weight: 700; }
         .empty-state {
             text-align: center;
             padding: 3rem;
@@ -285,6 +308,7 @@ function sure_format_ssddss($saniye) {
 <div class="container">
 
     <?php if (count($kitaplar) > 0): ?>
+        <?php $toplam_tahmini_saniye = 0; ?>
         <div class="book-grid">
             <?php foreach ($kitaplar as $kitap): ?>
                 <?php
@@ -298,8 +322,24 @@ function sure_format_ssddss($saniye) {
                 $toplam_okunabilir = max(0, $bitis_eff - $baslangic + 1);
                 $okunan = max(0, min($son_sayfa - $baslangic + 1, $toplam_okunabilir));
                 $yuzde = $toplam_okunabilir > 0 ? min(100, (int) round(($okunan / $toplam_okunabilir) * 100)) : 0;
+                $toplam_okunan_sayfa = (int) ($kitap['toplam_okunan_sayfa'] ?? 0);
+                $toplam_saniye_kitap = (int) ($kitap['toplam_saniye'] ?? 0);
+                $tahmini_goster = ((int)$kitap['durum_id'] === 2) && $toplam_okunan_sayfa > 0;
+                $kalan_sayfa = max(0, $bitis_eff - $son_sayfa);
+                $saniye_per_sayfa = $toplam_okunan_sayfa > 0 ? $toplam_saniye_kitap / $toplam_okunan_sayfa : 0;
+                $tahmini_saniye = ($kalan_sayfa > 0 && $saniye_per_sayfa > 0) ? (int) round($kalan_sayfa * $saniye_per_sayfa) : 0;
+                if ((int)$kitap['durum_id'] === 2) $toplam_tahmini_saniye += $tahmini_saniye;
                 ?>
                 <div class="book-card">
+                    <?php if ($tahmini_goster): ?>
+                    <div class="tahmini-kalan">
+                        <?php if ($kalan_sayfa > 0): ?>
+                        <?= sure_format_ssddss($tahmini_saniye) ?>
+                        <?php else: ?>
+                        Bitti
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
                     <div class="cover-wrap">
                         <a href="oku.php?id=<?= (int) $kitap['id'] ?>" class="cover-link" aria-label="Okumaya devam et">
                             <?php if (!empty($kitap['kapak'])): ?>
@@ -331,6 +371,12 @@ function sure_format_ssddss($saniye) {
                 </div>
             <?php endforeach; ?>
         </div>
+        <?php if ($toplam_tahmini_saniye > 0): ?>
+        <div class="toplam-kalan-wrap">
+            <span class="toplam-kalan-label">Toplam kalan okuma süresi:</span>
+            <span class="toplam-kalan-sure"><?= sure_format_ssddss($toplam_tahmini_saniye) ?></span>
+        </div>
+        <?php endif; ?>
     <?php else: ?>
         <div class="empty-state">
             <h3>Henüz hiç kitap eklemediniz.</h3>
