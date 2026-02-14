@@ -1,0 +1,1064 @@
+<?php
+require_once 'config/config.php';
+require_once __DIR__ . '/alintilar/bootstrap.php';
+
+// Güvenlik: Giriş yapılmamışsa yönlendir
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
+
+$user_id = $_SESSION['user_id'];
+$hata_mesaji = '';
+$basari_mesaji = '';
+
+// --- ALINTI / DÜŞÜNCE POST AKSİYONLARI (kitap_id ile yönlendirme) ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+    $redirect_kitap_id = isset($_POST['kitap_id']) ? (int)$_POST['kitap_id'] : 0;
+    if ($redirect_kitap_id <= 0) {
+        header("Location: index.php");
+        exit;
+    }
+    $err = null;
+    if ($action === 'alinti_ekle') {
+        $err = alinti_ekle(
+            $pdo, $user_id, $redirect_kitap_id,
+            $_POST['alinti'] ?? '',
+            $_POST['sayfa_baslangic'] ?? '',
+            $_POST['sayfa_bitis'] ?? '',
+            $_FILES['foto'] ?? null
+        );
+    } elseif ($action === 'alinti_guncelle') {
+        $err = alinti_guncelle(
+            $pdo, $user_id, (int)($_POST['alinti_id'] ?? 0), $redirect_kitap_id,
+            $_POST['alinti'] ?? '',
+            $_POST['sayfa_baslangic'] ?? '',
+            $_POST['sayfa_bitis'] ?? '',
+            $_POST['mevcut_foto'] ?? '',
+            $_FILES['foto'] ?? null
+        );
+    } elseif ($action === 'alinti_sil') {
+        $err = alinti_sil($pdo, $user_id, (int)($_POST['alinti_id'] ?? 0));
+    } elseif ($action === 'dusunce_ekle') {
+        $alinti_id = isset($_POST['alinti_id']) && $_POST['alinti_id'] !== '' ? (int)$_POST['alinti_id'] : null;
+        $err = dusunce_ekle(
+            $pdo, $user_id, $redirect_kitap_id,
+            $_POST['dusunce'] ?? '',
+            $_POST['sayfa_baslangic'] ?? '',
+            $_POST['sayfa_bitis'] ?? '',
+            $alinti_id
+        );
+    } elseif ($action === 'dusunce_guncelle') {
+        $err = dusunce_guncelle(
+            $pdo, $user_id, (int)($_POST['dusunce_id'] ?? 0), $redirect_kitap_id,
+            $_POST['dusunce'] ?? '',
+            $_POST['sayfa_baslangic'] ?? '',
+            $_POST['sayfa_bitis'] ?? ''
+        );
+    } elseif ($action === 'dusunce_sil') {
+        $err = dusunce_sil($pdo, $user_id, (int)($_POST['dusunce_id'] ?? 0));
+    }
+    $q = $err ? '&alinti_hata=' . urlencode($err) : '';
+    header("Location: kitap.php?id=" . $redirect_kitap_id . $q);
+    exit;
+}
+
+// --- SİLME İŞLEMİ (GET ile delete_id gelirse) ---
+if (isset($_GET['delete_id'])) {
+    $delete_id = (int)$_GET['delete_id'];
+    
+    // Kitabın bu kullanıcıya ait olup olmadığını ve kapağını kontrol et
+    $stmt = $pdo->prepare("SELECT kapak FROM kitaplar WHERE id = :id AND user_id = :user_id");
+    $stmt->execute(['id' => $delete_id, 'user_id' => $user_id]);
+    $silinecek_kitap = $stmt->fetch();
+
+    if ($silinecek_kitap) {
+        // Alıntı fotoğraflarını sunucudan sil
+        alinti_fotolarini_sil_kitap($pdo, $delete_id);
+        // Varsa kapak resmini sunucudan sil
+        if (!empty($silinecek_kitap['kapak']) && file_exists('assets/uploads/' . $silinecek_kitap['kapak'])) {
+            unlink('assets/uploads/' . $silinecek_kitap['kapak']);
+        }
+        // Veritabanından sil (ON DELETE CASCADE olduğu için kitap_raf, okumalar, alintilar, dusunceler da silinir)
+        $delStmt = $pdo->prepare("DELETE FROM kitaplar WHERE id = :id");
+        $delStmt->execute(['id' => $delete_id]);
+        
+        header("Location: index.php");
+        exit;
+    }
+}
+
+// Form varsayılan değerleri (Ekleme modu için boş)
+$kitap_id = 0;
+$baslik = '';
+$yazar = '';
+$sayfa = 0;
+$baslangic_sayfa = 1;
+$bitis_sayfa = null;
+$durum_id = 1; // Varsayılan: Okunacak (1)
+$mevcut_kapak = '';
+$secili_raflar = [];
+
+// --- DÜZENLEME MODU (GET ile id gelirse mevcut verileri çek) ---
+if (isset($_GET['id'])) {
+    $kitap_id = (int)$_GET['id'];
+    $stmt = $pdo->prepare("SELECT * FROM kitaplar WHERE id = :id AND user_id = :user_id");
+    $stmt->execute(['id' => $kitap_id, 'user_id' => $user_id]);
+    $kitap = $stmt->fetch();
+
+    if ($kitap) {
+        $baslik = $kitap['baslik'];
+        $yazar = $kitap['yazar'];
+        $sayfa = $kitap['sayfa'];
+        $baslangic_sayfa = isset($kitap['baslangic_sayfa']) ? (int)$kitap['baslangic_sayfa'] : 1;
+        $bitis_sayfa = isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa'] !== null && $kitap['bitis_sayfa'] !== '' ? (int)$kitap['bitis_sayfa'] : null;
+        $durum_id = $kitap['durum_id'];
+        $mevcut_kapak = $kitap['kapak'];
+
+        // Kitabın kayıtlı olduğu rafları çek
+        $rafStmt = $pdo->prepare("SELECT raf_id FROM kitap_raf WHERE kitap_id = :kitap_id");
+        $rafStmt->execute(['kitap_id' => $kitap_id]);
+        $secili_raflar = $rafStmt->fetchAll(PDO::FETCH_COLUMN); // Sadece ID'leri dizi olarak alır
+    } else {
+        die("Kitap bulunamadı veya yetkiniz yok.");
+    }
+}
+
+// --- FORM GÖNDERME (POST İşlemi - Ekleme veya Güncelleme) ---
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $baslik = trim($_POST['baslik']);
+    $yazar = trim($_POST['yazar']);
+    $sayfa = (int)$_POST['sayfa'];
+    $baslangic_sayfa = isset($_POST['baslangic_sayfa']) && $_POST['baslangic_sayfa'] !== '' ? (int)$_POST['baslangic_sayfa'] : 1;
+    $bitis_sayfa_raw = isset($_POST['bitis_sayfa']) && $_POST['bitis_sayfa'] !== '' ? (int)$_POST['bitis_sayfa'] : null;
+    $bitis_sayfa = $bitis_sayfa_raw;
+    $durum_id = (int)$_POST['durum_id'];
+    $kitap_id = (int)$_POST['kitap_id']; // 0 ise yeni kayıt, değilse güncelleme
+    $gelen_raflar = $_POST['raflar'] ?? []; // Seçilen raflar dizisi
+
+    // Düzenleme modunda mevcut kapağı korumak için veritabanından oku
+    if ($kitap_id > 0) {
+        $stmtMevcut = $pdo->prepare("SELECT kapak FROM kitaplar WHERE id = ? AND user_id = ?");
+        $stmtMevcut->execute([$kitap_id, $user_id]);
+        $row = $stmtMevcut->fetch(PDO::FETCH_ASSOC);
+        if ($row) {
+            $mevcut_kapak = $row['kapak'] ?? '';
+        }
+    }
+
+    if (empty($baslik) || empty($yazar)) {
+            $hata_mesaji = "Başlık ve yazar alanları zorunludur.";
+    } elseif ($bitis_sayfa !== null && $baslangic_sayfa > $bitis_sayfa) {
+        $hata_mesaji = "Bitiş sayfası, başlangıç sayfasından küçük olamaz.";
+    } elseif ($bitis_sayfa !== null && $sayfa > 0 && $bitis_sayfa > $sayfa) {
+        $hata_mesaji = "Bitiş sayfası, toplam sayfa sayısından büyük olamaz.";
+    } else {
+        // 1. Kapak Fotoğrafı Yükleme İşlemi
+        $kapak_adi = $mevcut_kapak; // Yeni yüklenmezse eskiyi koru
+        
+        if (isset($_FILES['kapak']) && $_FILES['kapak']['error'] == 0) {
+            $izin_verilen_uzantilar = ['jpg', 'jpeg', 'png', 'webp'];
+            $dosya_bilgisi = pathinfo($_FILES['kapak']['name']);
+            $uzanti = strtolower($dosya_bilgisi['extension']);
+
+            if (in_array($uzanti, $izin_verilen_uzantilar)) {
+                // Eşsiz bir dosya adı oluştur
+                $yeni_ad = uniqid('kapak_') . '.' . $uzanti;
+                $hedef_yol = 'assets/uploads/' . $yeni_ad;
+
+                // Klasör yoksa oluştur
+                if (!is_dir('assets/uploads')) {
+                    mkdir('assets/uploads', 0777, true);
+                }
+
+                if (move_uploaded_file($_FILES['kapak']['tmp_name'], $hedef_yol)) {
+                    // Yeni dosya yüklendi, eskisi varsa sunucudan sil
+                    if (!empty($mevcut_kapak) && file_exists('assets/uploads/' . $mevcut_kapak)) {
+                        unlink('assets/uploads/' . $mevcut_kapak);
+                    }
+                    $kapak_adi = $yeni_ad;
+                } else {
+                    $hata_mesaji = "Görsel yüklenirken bir hata oluştu.";
+                }
+            } else {
+                $hata_mesaji = "Sadece JPG, PNG ve WEBP formatları desteklenir.";
+            }
+        }
+
+        // 2. Veritabanına Kayıt/Güncelleme
+        if (empty($hata_mesaji)) {
+            try {
+                $pdo->beginTransaction(); // İşlemleri garantiye almak için Transaction başlat
+
+                if ($kitap_id > 0) {
+                    // GÜNCELLEME
+                    $stmt = $pdo->prepare("UPDATE kitaplar SET durum_id=?, baslik=?, yazar=?, kapak=?, sayfa=?, baslangic_sayfa=?, bitis_sayfa=? WHERE id=? AND user_id=?");
+                    $stmt->execute([$durum_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa, $kitap_id, $user_id]);
+                    $islem_yapilan_kitap_id = $kitap_id;
+                    $basari_mesaji = "Kitap başarıyla güncellendi.";
+                } else {
+                    // YENİ KAYIT
+                    $stmt = $pdo->prepare("INSERT INTO kitaplar (user_id, durum_id, baslik, yazar, kapak, sayfa, baslangic_sayfa, bitis_sayfa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$user_id, $durum_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa]);
+                    $islem_yapilan_kitap_id = $pdo->lastInsertId();
+                    $basari_mesaji = "Kitap başarıyla eklendi.";
+                }
+
+                // 3. Rafları Güncelleme (Çoktan Çoğa İlişki)
+                // Önce bu kitaba ait eski raf kayıtlarını sil
+                $delRafStmt = $pdo->prepare("DELETE FROM kitap_raf WHERE kitap_id = ?");
+                $delRafStmt->execute([$islem_yapilan_kitap_id]);
+
+                // Sonra seçili rafları yeniden ekle
+                if (!empty($gelen_raflar)) {
+                    $insRafStmt = $pdo->prepare("INSERT INTO kitap_raf (kitap_id, raf_id) VALUES (?, ?)");
+                    foreach ($gelen_raflar as $r_id) {
+                        $insRafStmt->execute([$islem_yapilan_kitap_id, (int)$r_id]);
+                    }
+                }
+
+                $pdo->commit(); // Tüm işlemleri onayla ve veritabanına yaz
+                
+                // Başarılı işlem sonrası: düzenlemede kitap sayfasında kal, yeni eklemede ana sayfa
+                if ($islem_yapilan_kitap_id > 0) {
+                    header("Location: kitap.php?id=" . $islem_yapilan_kitap_id);
+                } else {
+                    header("Location: index.php");
+                }
+                exit;
+
+            } catch (PDOException $e) {
+                $pdo->rollBack(); // Hata varsa hiçbir işlemi yapma, geri al
+                $hata_mesaji = "Kayıt hatası: " . $e->getMessage();
+            }
+        }
+    }
+}
+
+// Form için Durumları Çek
+$durumlar = $pdo->query("SELECT * FROM durum WHERE aktif = 1")->fetchAll();
+
+// Form için Kullanıcıya Ait Rafları Çek
+$stmtRaflar = $pdo->prepare("SELECT * FROM raflar WHERE user_id = :user_id ORDER BY etiket ASC");
+$stmtRaflar->execute(['user_id' => $user_id]);
+$kullanici_raflari = $stmtRaflar->fetchAll();
+
+// Alıntı/düşünce akışı (sadece düzenleme modunda)
+$alintilar = [];
+$dusunceler = [];
+$akis = []; // kronolojik: ['tip' => 'alinti'|'dusunce', 'kayit' => ts, 'veri' => ...]
+if ($kitap_id > 0) {
+    $alintilar = alintilar_for_kitap($pdo, $kitap_id);
+    $dusunceler = dusunceler_for_kitap($pdo, $kitap_id);
+    $dusunceler_by_alinti = [];
+    $standalone_dusunceler = [];
+    foreach ($dusunceler as $d) {
+        if (!empty($d['alinti_id'])) {
+            $dusunceler_by_alinti[(int)$d['alinti_id']][] = $d;
+        } else {
+            $standalone_dusunceler[] = $d;
+        }
+    }
+    foreach ($alintilar as $a) {
+        $akis[] = ['tip' => 'alinti', 'kayit' => strtotime($a['kayit']), 'veri' => $a];
+    }
+    foreach ($standalone_dusunceler as $d) {
+        $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
+    }
+    usort($akis, function ($x, $y) { return $x['kayit'] - $y['kayit']; });
+
+    // Bu kitaba ait okuma seansları (accordion tablo için)
+    $kitap_okumalari = [];
+    $stmtOku = $pdo->prepare("
+        SELECT o.id, o.book_id, o.baslama, o.bitis, o.sure_saniye, o.baslama_sayfasi, o.bitis_sayfasi, k.baslik as kitap_baslik, k.kapak
+        FROM okumalar o
+        LEFT JOIN kitaplar k ON o.book_id = k.id
+        WHERE o.user_id = :user_id AND o.book_id = :book_id
+        ORDER BY o.baslama DESC
+    ");
+    $stmtOku->execute(['user_id' => $user_id, 'book_id' => $kitap_id]);
+    $kitap_okumalari = $stmtOku->fetchAll(PDO::FETCH_ASSOC);
+    $gunlere_gore_kitap = [];
+    foreach ($kitap_okumalari as $o) {
+        $gun = date('Y-m-d', strtotime($o['baslama']));
+        if (!isset($gunlere_gore_kitap[$gun])) {
+            $gunlere_gore_kitap[$gun] = ['toplam_saniye' => 0, 'toplam_sayfa' => 0, 'seanslar' => []];
+        }
+        $gunlere_gore_kitap[$gun]['toplam_saniye'] += (int) $o['sure_saniye'];
+        $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
+        if ($sayfa_adedi < 1) $sayfa_adedi = 0;
+        $gunlere_gore_kitap[$gun]['toplam_sayfa'] += $sayfa_adedi;
+        $gunlere_gore_kitap[$gun]['seanslar'][] = $o;
+    }
+} else {
+    $kitap_okumalari = [];
+    $gunlere_gore_kitap = [];
+}
+function sure_format_ssddss($saniye) {
+    $s = (int) $saniye;
+    return sprintf('%02d:%02d:%02d', (int) floor($s / 3600), (int) floor(fmod($s / 60, 60)), $s % 60);
+}
+function sure_format_ddss($saniye) {
+    $s = (int) $saniye;
+    return sprintf('%02d:%02d', (int) floor($s / 60), $s % 60);
+}
+$alinti_hata = isset($_GET['alinti_hata']) ? trim($_GET['alinti_hata']) : '';
+
+/** Rich text çıktı için güvenli HTML (sadece izin verilen etiketler) */
+function kitap_richtext_html($html) {
+    if ($html === null || $html === '') return '';
+    $html = strip_tags($html, '<p><br><b><i><u><strong><em><mark><span>');
+    $html = preg_replace_callback('/<span\s+([^>]*)>/', function ($m) {
+        if (preg_match('/class=["\'](fs-small|fs-large|fs-normal)["\']/', $m[1], $c)) {
+            return '<span class="' . $c[1] . '">';
+        }
+        return '<span>';
+    }, $html);
+    return $html;
+}
+
+?>
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?= $kitap_id > 0 ? 'Kitap Düzenle' : 'Yeni Kitap Ekle' ?> - Reading App</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9fafb; margin: 0; padding: 0; color: #1f2937; }
+        .navbar {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04);
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+        }
+        .navbar h1 { margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
+        .navbar h1 a { color: #1e40af; text-decoration: none; transition: color 0.2s ease; }
+        .navbar h1 a:hover { color: #2563eb; }
+        .user-info { display: flex; align-items: center; gap: 0.5rem; }
+        .user-info a {
+            padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 500;
+            text-decoration: none; color: #475569; transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        .user-info a[href="kitaplar.php"]:hover, .user-info a[href="raflar.php"]:hover, .user-info a[href="okumalar.php"]:hover {
+            background-color: #f1f5f9; color: #1e293b;
+        }
+        .user-info .nav-btn-primary { background-color: #2563eb; color: white !important; }
+        .user-info .nav-btn-primary:hover { background-color: #1d4ed8 !important; color: white !important; }
+        .user-info .nav-btn-secondary { background-color: #10b981; color: white !important; }
+        .user-info .nav-btn-secondary:hover { background-color: #059669 !important; color: white !important; }
+        .user-info .btn-logout { color: #dc2626; background-color: transparent; }
+        .user-info .btn-logout:hover { background-color: #fef2f2; color: #b91c1c; }
+        .container { max-width: 900px; margin: 2rem auto; padding: 1.5rem; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.08); overflow: hidden; }
+        .kitap-bilgi-wrap { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: flex-start; }
+        .kitap-kapak-wrap { flex-shrink: 0; width: 280px; }
+        .kitap-kapak-wrap img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: block; }
+        .kitap-kapak-placeholder { width: 100%; aspect-ratio: 2/3; background: #e5e7eb; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.85rem; text-align: center; }
+        .kitap-form-right { flex: 1; min-width: 0; }
+        .kitap-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; }
+        .kitap-form-grid .form-group { margin-bottom: 1rem; }
+        .kitap-form-grid .form-group.full-width { grid-column: 1 / -1; }
+        h2 { margin: 0 0 1rem 0; color: #1e293b; font-size: 1.25rem; }
+        .form-group label { display: block; font-weight: 600; margin-bottom: 0.35rem; color: #4b5563; font-size: 0.85rem; }
+        input[type="text"], input[type="number"], select { width: 100%; padding: 0.5rem 0.65rem; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; font-size: 0.95rem; }
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.5rem 0; }
+        .checkbox-group label { font-weight: normal; margin: 0; display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9rem; }
+        .form-actions { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600; text-decoration: none; display: inline-block; }
+        .btn-primary { background-color: #2563eb; color: white; }
+        .btn-primary:hover { background-color: #1d4ed8; }
+        .btn-cancel { background-color: #64748b; color: white; }
+        .btn-danger { background-color: #dc2626; color: white; margin-left: auto; }
+        .alert { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
+        .alert-error { background-color: #fef2f2; color: #b91c1c; }
+        .kapak-upload-wrap { margin-top: 0.5rem; }
+        .kapak-upload-wrap input[type="file"] { font-size: 0.85rem; }
+        .btn-sm { padding: 0.5rem 1rem; font-size: 0.9rem; }
+        .btn-secondary { background-color: #10b981; color: white; }
+        .btn-secondary:hover { background-color: #059669; }
+        .akis-listesi { margin-top: 1rem; line-height: 1.5; }
+        .akis-item { margin-bottom: 1.5rem; padding: 1rem; border-radius: 8px; border: 1px solid #e5e7eb; background: #fff; }
+        .akis-item.dusunce-standalone { background: #f3f4f6; }
+        .akis-meta { font-size: 0.85rem; color: #6b7280; }
+        .sayfa-aralik { font-size: 0.85rem; color: #4b5563; }
+        .alinti-metin, .dusunce-metin { white-space: pre-wrap; margin: 0.5rem 0; line-height: 1.5; }
+        .alinti-foto-wrap { margin-top: 0.5rem; }
+        .alinti-foto-thumb { max-width: 160px; max-height: 200px; object-fit: cover; border-radius: 4px; }
+        .dusunce-alt { margin-top: 0.75rem; margin-left: 1rem; padding: 0.75rem; background: #f9fafb; border-radius: 6px; border-left: 3px solid #2563eb; line-height: 1.5; }
+        .akis-actions-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+        .akis-actions { display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+        .akis-meta-right { font-size: 0.85rem; color: #6b7280; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .btn-link { background: none; border: none; color: #2563eb; cursor: pointer; text-decoration: none; font-size: 0.9rem; padding: 0 0.5rem 0 0; }
+        .btn-link:hover { text-decoration: underline; }
+        .btn-link-danger { color: #dc2626; }
+        .modal { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-content { background: #fff; padding: 1.5rem; border-radius: 8px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto; position: relative; }
+        .modal-close { position: absolute; right: 1rem; top: 0.5rem; font-size: 1.5rem; cursor: pointer; color: #6b7280; }
+        .modal-close:hover { color: #111; }
+        .modal-dusunce-content { max-width: 560px; }
+        .modal-dusunce-alinti-block { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb; }
+        .modal-dusunce-alinti-block strong { display: block; margin-bottom: 0.35rem; color: #374151; }
+        .alinti-onay { font-size: 0.95rem; color: #374151; margin-bottom: 0.75rem; line-height: 1.4; max-height: 180px; overflow-y: auto; }
+        .modal-dusunce-alinti-foto-wrap { max-width: 450px; margin-top: 0.5rem; }
+        .modal-dusunce-alinti-foto-wrap img { max-width: 100%; height: auto; border-radius: 6px; display: block; }
+        textarea { width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box; font-family: inherit; }
+        .fs-small { font-size: 0.85em; }
+        .fs-large { font-size: 1.15em; }
+        .fs-normal { font-size: 1em; }
+        .rich-toolbar { display: flex; gap: 2px; padding: 4px 0; flex-wrap: wrap; }
+        .rich-toolbar button { padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #f9fafb; cursor: pointer; font-size: 0.85rem; }
+        .rich-toolbar button:hover { background: #e5e7eb; }
+        .rich-editor { min-height: 100px; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font-family: inherit; font-size: 1rem; overflow-y: auto; }
+        .rich-editor:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.2); }
+        /* Kitap dizgisi: okunaklı serif */
+        body, .container { font-family: Georgia, 'Times New Roman', 'Liberation Serif', serif; }
+        .navbar, .navbar a, .form-group label, .btn, .akis-meta, .sayfa-aralik, .btn-link { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .alinti-metin { font-style: italic; }
+        /* Okuma seansları accordion */
+        .accordion-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #334155;
+            text-align: left;
+        }
+        .accordion-head:hover { background: #e2e8f0; }
+        .accordion-head .accordion-toggle { font-size: 0.9rem; color: #64748b; }
+        .accordion-body { padding: 1rem 0; display: none; }
+        .accordion-body.open { display: block; }
+        .day-group { margin-bottom: 1.5rem; }
+        .day-header {
+            font-weight: 700;
+            color: #374151;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .day-total { font-variant-numeric: tabular-nums; color: #10b981; font-size: 0.95rem; }
+        .table-container { overflow-x: auto; }
+        .table-container table { width: 100%; border-collapse: collapse; text-align: left; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .table-container th, .table-container td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #e5e7eb; }
+        .table-container th { background-color: #f9fafb; font-weight: 600; color: #4b5563; font-size: 0.85rem; }
+        .table-container tr:hover { background-color: #f9fafb; }
+        .cover-thumb { width: 48px; height: 72px; object-fit: cover; border-radius: 4px; background-color: #e5e7eb; }
+        .cover-thumb-placeholder { width: 48px; height: 72px; border-radius: 4px; background: #e5e7eb; font-size: 0.6rem; color: #9ca3af; display: flex; align-items: center; justify-content: center; }
+        /* PDF modal */
+        .section-header-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+        .section-header-row h3 { margin: 0; color: #374151; }
+        .btn-pdf { padding: 0.4rem 0.9rem; background: #64748b; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600; text-decoration: none; display: inline-block; }
+        .btn-pdf:hover { background: #475569; color: white; }
+        #modal-pdf .modal-content { max-width: 640px; }
+        .pdf-header { display: flex; gap: 1.25rem; align-items: flex-start; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb; }
+        .pdf-header-cover { flex-shrink: 0; width: 80px; }
+        .pdf-header-cover img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; }
+        .pdf-header-cover-placeholder { width: 80px; aspect-ratio: 2/3; background: #e5e7eb; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; color: #9ca3af; text-align: center; }
+        .pdf-header-info { flex: 1; min-width: 0; }
+        .pdf-header-info h4 { margin: 0 0 0.25rem 0; font-size: 1.1rem; color: #1f2937; }
+        .pdf-header-info .pdf-meta { font-size: 0.9rem; color: #6b7280; }
+        .pdf-print-body { padding: 0 0 1.5rem 0; line-height: 1.5; }
+        .pdf-print-body .akis-item { margin-bottom: 1.25rem; padding: 0.75rem; border-radius: 6px; border: 1px solid #e5e7eb; }
+        .pdf-print-body .alinti-metin { font-style: italic; }
+        .pdf-print-body .akis-meta-row { display: flex; justify-content: flex-end; margin-top: 0.35rem; font-size: 0.8rem; color: #6b7280; }
+        .pdf-print-body .dusunce-alt { line-height: 1.5; }
+        .pdf-print-body .dusunce-alt .akis-meta-row { margin-top: 0.25rem; }
+        @media print {
+            body * { visibility: hidden; }
+            #modal-pdf, #modal-pdf * { visibility: visible; }
+            #modal-pdf { position: absolute; left: 0; top: 0; width: 100%; min-height: 100%; background: white; padding: 0; margin: 0; overflow: visible !important; display: block !important; }
+            #modal-pdf .modal-content { display: block !important; max-width: none !important; max-height: none !important; width: 100%; min-height: auto; overflow: visible !important; box-shadow: none; border: none; padding: 0; }
+            #modal-pdf .modal-close, #modal-pdf .btn-yazdir-wrap { display: none !important; }
+            #modal-pdf .pdf-print-area { width: 100%; max-width: 210mm; margin: 0 auto; padding: 12mm 15mm 18mm; box-sizing: border-box; font-size: 11pt; line-height: 1.5; overflow: visible !important; }
+            #modal-pdf .pdf-print-area .pdf-header { margin-bottom: 1.2rem; padding-bottom: 0.75rem; }
+            #modal-pdf .pdf-print-area .pdf-header-info h4 { font-size: 12pt; }
+            #modal-pdf .pdf-print-area .pdf-print-body .akis-item { margin-bottom: 1rem; padding: 0.6rem 0; border: none; border-bottom: 1px solid #e5e7eb; page-break-inside: auto; }
+            #modal-pdf .pdf-print-area .alinti-metin, #modal-pdf .pdf-print-area .dusunce-metin { font-size: 11pt; line-height: 1.5; margin: 0.25rem 0; }
+            #modal-pdf .pdf-print-area .dusunce-alt { margin-top: 0.5rem; padding: 0.5rem 0 0 0.75rem; border-left: 2px solid #94a3b8; }
+        }
+        @page {
+            size: A4;
+            margin: 15mm;
+            margin-bottom: 20mm;
+            @bottom-center {
+                content: "Sayfa " counter(page) " / " counter(pages);
+                font-size: 10pt;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                color: #6b7280;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar">
+    <h1><a href="index.php">Reading App</a></h1>
+    <div class="user-info">
+        <a href="kitaplar.php">Kitaplar</a>
+        <a href="raflar.php">Raflar</a>
+        <a href="okumalar.php">Okumalar</a>
+        <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
+        <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
+        <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
+    </div>
+</nav>
+
+<div class="container">
+    <h2><?= $kitap_id > 0 ? 'Kitap Düzenle' : 'Yeni Kitap Ekle' ?></h2>
+
+    <?php if ($hata_mesaji): ?>
+        <div class="alert alert-error"><?= $hata_mesaji ?></div>
+    <?php endif; ?>
+    <?php if ($alinti_hata): ?>
+        <div class="alert alert-error"><?= htmlspecialchars($alinti_hata) ?></div>
+    <?php endif; ?>
+
+    <form method="POST" action="kitap.php" enctype="multipart/form-data">
+        <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+        <div class="kitap-bilgi-wrap">
+            <div class="kitap-kapak-wrap">
+                <?php if (!empty($mevcut_kapak)): ?>
+                    <img src="assets/uploads/<?= htmlspecialchars($mevcut_kapak) ?>" alt="Kapak" id="kitap-kapak-preview">
+                <?php else: ?>
+                    <div class="kitap-kapak-placeholder" id="kitap-kapak-preview">Kapak yok</div>
+                <?php endif; ?>
+                <div class="kapak-upload-wrap">
+                    <label for="kapak" style="font-size:0.8rem; color:#6b7280;">Kapak</label>
+                    <input type="file" id="kapak" name="kapak" accept="image/jpeg, image/png, image/webp">
+                </div>
+            </div>
+            <div class="kitap-form-right">
+                <div class="kitap-form-grid">
+                    <div class="form-group full-width">
+                        <label for="baslik">Kitap Adı *</label>
+                        <input type="text" id="baslik" name="baslik" value="<?= htmlspecialchars($baslik) ?>" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="yazar">Yazar *</label>
+                        <input type="text" id="yazar" name="yazar" value="<?= htmlspecialchars($yazar) ?>" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="durum_id">Durum</label>
+                        <select id="durum_id" name="durum_id">
+                            <?php foreach ($durumlar as $d): ?>
+                                <option value="<?= $d['id'] ?>" <?= $durum_id == $d['id'] ? 'selected' : '' ?>><?= htmlspecialchars($d['durum']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sayfa">Sayfa</label>
+                        <input type="number" id="sayfa" name="sayfa" value="<?= (int)$sayfa ?>" min="0" placeholder="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="baslangic_sayfa">Başlangıç sayfa</label>
+                        <input type="number" id="baslangic_sayfa" name="baslangic_sayfa" value="<?= $baslangic_sayfa ?>" min="1" placeholder="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="bitis_sayfa">Bitiş sayfa</label>
+                        <input type="number" id="bitis_sayfa" name="bitis_sayfa" value="<?= $bitis_sayfa !== null ? (int)$bitis_sayfa : '' ?>" min="1" placeholder="Boş">
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Raflar</label>
+                        <?php if (count($kullanici_raflari) > 0): ?>
+                            <div class="checkbox-group">
+                                <?php foreach ($kullanici_raflari as $raf): ?>
+                                    <label>
+                                        <input type="checkbox" name="raflar[]" value="<?= $raf['id'] ?>" <?= in_array($raf['id'], $secili_raflar) ? 'checked' : '' ?>>
+                                        <?= htmlspecialchars($raf['etiket']) ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <span style="color:#6b7280; font-size:0.85rem;">Raf yok. <a href="raf.php">Raf Ekle</a></span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Kaydet</button>
+                    <a href="index.php" class="btn btn-cancel">İptal</a>
+                    <?php if ($kitap_id > 0): ?>
+                        <a href="kitap.php?delete_id=<?= $kitap_id ?>" class="btn btn-danger" onclick="return confirm('Bu kitabı tamamen silmek istediğinize emin misiniz?');">Sil</a>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <?php if ($kitap_id > 0): ?>
+    <hr style="border:0; border-top:1px solid #e5e7eb; margin: 2rem 0;">
+    <?php if (count($gunlere_gore_kitap) > 0): ?>
+    <div class="accordion-wrap" style="margin-bottom: 1.5rem;">
+        <button type="button" class="accordion-head" id="accordion-okuma-head" aria-expanded="false" onclick="toggleAccordion('accordion-okuma')">
+            <span>Okuma seansları (<?= count($kitap_okumalari) ?> seans)</span>
+            <span class="accordion-toggle" id="accordion-okuma-toggle">▼</span>
+        </button>
+        <div class="accordion-body" id="accordion-okuma-body">
+            <?php foreach ($gunlere_gore_kitap as $gun => $veri):
+                $gun_tarih = new DateTime($gun);
+                $aylar = ['', 'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+                $gun_etiket = $gun_tarih->format('j') . ' ' . $aylar[(int) $gun_tarih->format('n')] . ' ' . $gun_tarih->format('Y');
+                $gun_toplam_sayfa = (int) ($veri['toplam_sayfa'] ?? 0);
+                $gun_ortalama_ddss = $gun_toplam_sayfa > 0 ? sure_format_ddss((int) round($veri['toplam_saniye'] / $gun_toplam_sayfa)) : '—';
+            ?>
+            <section class="day-group">
+                <div class="day-header">
+                    <span><?= $gun_etiket ?></span>
+                    <span class="day-total">
+                        Toplam: <?= sure_format_ssddss($veri['toplam_saniye']) ?>
+                        <?php if ($gun_toplam_sayfa > 0): ?> | <?= $gun_toplam_sayfa ?> sayfa | Sayfa başı ortalama: <?= $gun_ortalama_ddss ?><?php endif; ?>
+                    </span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Tarih / Saat</th>
+                                <th>Kitap</th>
+                                <th>Başlama sayfası</th>
+                                <th>Bitiş sayfası</th>
+                                <th>Okunan sayfa</th>
+                                <th>Süre</th>
+                                <th>Sayfa başı</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($veri['seanslar'] as $o):
+                                $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
+                                if ($sayfa_adedi < 1) $sayfa_adedi = 1;
+                                $saniye_per_sayfa = (int) round((int)$o['sure_saniye'] / $sayfa_adedi);
+                                $sayfa_basi_ddss = sure_format_ddss($saniye_per_sayfa);
+                            ?>
+                            <tr>
+                                <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                                <td><a href="kitap.php?id=<?= (int)$kitap_id ?>"><?= htmlspecialchars($o['kitap_baslik'] ?? '—') ?></a></td>
+                                <td><?= (int) $o['baslama_sayfasi'] ?></td>
+                                <td><?= $o['bitis_sayfasi'] !== null ? (int) $o['bitis_sayfasi'] : '—' ?></td>
+                                <td><?= $sayfa_adedi ?></td>
+                                <td><?= sure_format_ssddss($o['sure_saniye']) ?></td>
+                                <td><?= $sayfa_basi_ddss ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr style="font-weight: 600; background-color: #f9fafb;">
+                                <td colspan="4">Toplam</td>
+                                <td><?= $gun_toplam_sayfa > 0 ? (int) $gun_toplam_sayfa : '—' ?></td>
+                                <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
+                                <td><?= $gun_ortalama_ddss ?></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </section>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+    <div class="section-header-row">
+        <h3>Alıntılar ve Düşünceler</h3>
+        <button type="button" class="btn-pdf" onclick="openPdfModal()">PDF</button>
+    </div>
+    <p style="margin-bottom: 1rem;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openDusunceModal(null)">+ Düşünce</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="openAlintiModal()" style="margin-left: 0.5rem;">+ Alıntı</button>
+        <span style="color:#6b7280; font-size:0.9rem; margin-left:0.5rem;">Kitaba özel düşünce veya alıntı ekle</span>
+    </p>
+    <div class="akis-listesi">
+        <?php foreach ($akis as $item):
+            if ($item['tip'] === 'alinti'):
+                $a = $item['veri'];
+                $aid = (int)$a['id'];
+                $alt_dusunceler = $dusunceler_by_alinti[$aid] ?? [];
+        ?>
+        <div class="akis-item alinti-item">
+            <div class="alinti-metin"><?= kitap_richtext_html($a['alinti']) ?></div>
+            <?php if (!empty($a['foto'])): ?>
+                <div class="alinti-foto-wrap"><img src="alintilar/uploads/<?= htmlspecialchars($a['foto']) ?>" alt="Alıntı" class="alinti-foto-thumb"></div>
+            <?php endif; ?>
+            <div class="akis-actions-row">
+                <div class="akis-actions">
+                    <button type="button" class="btn-link" data-alinti="<?= htmlspecialchars(json_encode(['alinti' => $a['alinti'], 'alinti_display' => kitap_richtext_html($a['alinti']), 'foto' => $a['foto'] ?? ''], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>" onclick="openDusunceModal(<?= $aid ?>, this)">+ Düşünce</button>
+                    <a href="#" class="btn-link" data-alinti-json="<?= htmlspecialchars(json_encode($a, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>" onclick="openAlintiEditModal(this); return false;">Düzenle</a>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Bu alıntıyı silmek istediğinize emin misiniz?');">
+                        <input type="hidden" name="action" value="alinti_sil">
+                        <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+                        <input type="hidden" name="alinti_id" value="<?= $aid ?>">
+                        <button type="submit" class="btn-link btn-link-danger">Sil</button>
+                    </form>
+                </div>
+                <div class="akis-meta-right">
+                    <?= date('d.m.Y H:i', $item['kayit']) ?>
+                    <?php if (!empty($a['sayfa_baslangic']) || !empty($a['sayfa_bitis'])): ?>
+                        · Sayfa <?= (int)$a['sayfa_baslangic'] ?><?= !empty($a['sayfa_bitis']) && $a['sayfa_bitis'] != $a['sayfa_baslangic'] ? '–' . (int)$a['sayfa_bitis'] : '' ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <?php foreach ($alt_dusunceler as $d): ?>
+            <div class="dusunce-alt">
+                <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
+                <div class="akis-actions-row">
+                    <div class="akis-actions">
+                        <a href="#" class="btn-link" data-dusunce-json="<?= htmlspecialchars(json_encode($d, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>" onclick="openDusunceEditModal(this); return false;">Düzenle</a>
+                        <form method="post" style="display:inline;" onsubmit="return confirm('Bu düşünceyi silmek istediğinize emin misiniz?');">
+                            <input type="hidden" name="action" value="dusunce_sil">
+                            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+                            <input type="hidden" name="dusunce_id" value="<?= (int)$d['id'] ?>">
+                            <button type="submit" class="btn-link btn-link-danger">Sil</button>
+                        </form>
+                    </div>
+                    <div class="akis-meta-right">
+                        <?= date('d.m.Y H:i', strtotime($d['kayit'] ?? '')) ?>
+                        <?php if (!empty($d['sayfa_baslangic']) || !empty($d['sayfa_bitis'])): ?>
+                            · Sayfa <?= (int)($d['sayfa_baslangic'] ?? '') ?><?= !empty($d['sayfa_bitis']) ? '–' . (int)$d['sayfa_bitis'] : '' ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php else:
+            $d = $item['veri'];
+        ?>
+        <div class="akis-item dusunce-standalone">
+            <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
+            <div class="akis-actions-row">
+                <div class="akis-actions">
+                    <a href="#" class="btn-link" data-dusunce-json="<?= htmlspecialchars(json_encode($d, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>" onclick="openDusunceEditModal(this); return false;">Düzenle</a>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Bu düşünceyi silmek istediğinize emin misiniz?');">
+                        <input type="hidden" name="action" value="dusunce_sil">
+                        <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+                        <input type="hidden" name="dusunce_id" value="<?= (int)$d['id'] ?>">
+                        <button type="submit" class="btn-link btn-link-danger">Sil</button>
+                    </form>
+                </div>
+                <div class="akis-meta-right">
+                    <?= date('d.m.Y H:i', $item['kayit']) ?>
+                    <?php if (!empty($d['sayfa_baslangic']) || !empty($d['sayfa_bitis'])): ?>
+                        · Sayfa <?= (int)($d['sayfa_baslangic'] ?? '') ?><?= !empty($d['sayfa_bitis']) ? '–' . (int)$d['sayfa_bitis'] : '' ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        <?php endif; endforeach; ?>
+        <?php if (count($akis) === 0): ?>
+            <p style="color:#6b7280;">Henüz alıntı veya düşünce yok. Yukarıdaki butonlarla ekleyebilirsiniz.</p>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+</div>
+
+<?php if ($kitap_id > 0): ?>
+<!-- Modal: Alıntı Ekle -->
+<div id="modal-alinti" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('modal-alinti')">&times;</span>
+        <h3 id="modal-alinti-title">Alıntı Ekle</h3>
+        <form method="post" action="kitap.php" enctype="multipart/form-data" id="form-alinti" onsubmit="return syncRichToHidden('modal-alinti-editor','modal-alinti-hidden');">
+            <input type="hidden" name="action" value="alinti_ekle">
+            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+            <input type="hidden" name="alinti_id" id="alinti_id_edit" value="">
+            <input type="hidden" name="mevcut_foto" id="mevcut_foto" value="">
+            <div class="form-group">
+                <label>Alıntı metni *</label>
+                <div class="rich-toolbar" id="toolbar-alinti">
+                    <button type="button" onclick="richCmd('modal-alinti-editor','bold')" title="Kalın">B</button>
+                    <button type="button" onclick="richCmd('modal-alinti-editor','italic')" title="İtalik">İ</button>
+                    <button type="button" onclick="richCmd('modal-alinti-editor','underline')" title="Altı çizili">U</button>
+                    <button type="button" onclick="richCmd('modal-alinti-editor','hiliteColor', false, '#fef08a')" title="Vurgula">Vurgula</button>
+                    <select onchange="var v=this.value; if(v) richCmd('modal-alinti-editor','fontSize', false, v); this.selectedIndex=0;" title="Yazı boyutu">
+                        <option value="">Boyut</option>
+                        <option value="1">Küçük</option>
+                        <option value="3">Normal</option>
+                        <option value="5">Büyük</option>
+                    </select>
+                </div>
+                <div id="modal-alinti-editor" class="rich-editor" contenteditable="true" data-hidden-name="alinti"></div>
+                <input type="hidden" name="alinti" id="modal-alinti-hidden">
+            </div>
+            <div class="form-group">
+                <label>Sayfa başlangıç</label>
+                <input type="number" name="sayfa_baslangic" id="modal-alinti-sb" min="1" placeholder="">
+            </div>
+            <div class="form-group">
+                <label>Sayfa bitiş</label>
+                <input type="number" name="sayfa_bitis" id="modal-alinti-sbit" min="1" placeholder="">
+            </div>
+            <div class="form-group" id="modal-alinti-foto-wrap">
+                <label>Sayfa fotoğrafı</label>
+                <input type="file" name="foto" accept="image/jpeg, image/png, image/webp">
+                <div id="modal-alinti-foto-preview"></div>
+            </div>
+            <button type="submit" class="btn btn-primary">Kaydet</button>
+            <button type="button" class="btn btn-cancel" onclick="closeModal('modal-alinti')">İptal</button>
+        </form>
+    </div>
+</div>
+<!-- Modal: Düşünce Ekle (alıntıya bağlı veya kitaba özel) -->
+<div id="modal-dusunce" class="modal" style="display:none;">
+    <div class="modal-content modal-dusunce-content">
+        <span class="modal-close" onclick="closeModal('modal-dusunce')">&times;</span>
+        <h3 id="modal-dusunce-title">Düşünce Ekle</h3>
+        <div id="modal-dusunce-alinti-panel" class="modal-dusunce-alinti-block" style="display:none;">
+            <strong>Alıntı:</strong>
+            <div id="modal-dusunce-alinti-text" class="alinti-onay"></div>
+            <div id="modal-dusunce-alinti-foto" class="modal-dusunce-alinti-foto-wrap"></div>
+        </div>
+        <form method="post" action="kitap.php" id="form-dusunce" onsubmit="return syncRichToHidden('modal-dusunce-editor','modal-dusunce-hidden');">
+            <input type="hidden" name="action" value="dusunce_ekle">
+            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+            <input type="hidden" name="alinti_id" id="dusunce_alinti_id" value="">
+            <div class="form-group">
+                <label>Düşünce *</label>
+                <div class="rich-toolbar" id="toolbar-dusunce">
+                    <button type="button" onclick="richCmd('modal-dusunce-editor','bold')" title="Kalın">B</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-editor','italic')" title="İtalik">İ</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-editor','underline')" title="Altı çizili">U</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-editor','hiliteColor', false, '#fef08a')" title="Vurgula">Vurgula</button>
+                    <select onchange="var v=this.value; if(v) richCmd('modal-dusunce-editor','fontSize', false, v); this.selectedIndex=0;" title="Yazı boyutu">
+                        <option value="">Boyut</option>
+                        <option value="1">Küçük</option>
+                        <option value="3">Normal</option>
+                        <option value="5">Büyük</option>
+                    </select>
+                </div>
+                <div id="modal-dusunce-editor" class="rich-editor" contenteditable="true" data-hidden-name="dusunce"></div>
+                <input type="hidden" name="dusunce" id="modal-dusunce-hidden">
+            </div>
+            <div class="form-group">
+                <label>Sayfa başlangıç</label>
+                <input type="number" name="sayfa_baslangic" id="modal-dusunce-sb" min="1" placeholder="">
+            </div>
+            <div class="form-group">
+                <label>Sayfa bitiş</label>
+                <input type="number" name="sayfa_bitis" id="modal-dusunce-sbit" min="1" placeholder="">
+            </div>
+            <button type="submit" class="btn btn-primary">Kaydet</button>
+            <button type="button" class="btn btn-cancel" onclick="closeModal('modal-dusunce')">İptal</button>
+        </form>
+    </div>
+</div>
+<!-- Modal: Düşünce Düzenle -->
+<div id="modal-dusunce-edit" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('modal-dusunce-edit')">&times;</span>
+        <h3>Düşünce Düzenle</h3>
+        <form method="post" action="kitap.php" id="form-dusunce-edit" onsubmit="return syncRichToHidden('modal-dusunce-edit-editor','modal-dusunce-edit-hidden');">
+            <input type="hidden" name="action" value="dusunce_guncelle">
+            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+            <input type="hidden" name="dusunce_id" id="dusunce_edit_id" value="">
+            <div class="form-group">
+                <label>Düşünce *</label>
+                <div class="rich-toolbar">
+                    <button type="button" onclick="richCmd('modal-dusunce-edit-editor','bold')">B</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-edit-editor','italic')">İ</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-edit-editor','underline')">U</button>
+                    <button type="button" onclick="richCmd('modal-dusunce-edit-editor','hiliteColor', false, '#fef08a')">Vurgula</button>
+                    <select onchange="var v=this.value; if(v) richCmd('modal-dusunce-edit-editor','fontSize', false, v); this.selectedIndex=0;">
+                        <option value="">Boyut</option>
+                        <option value="1">Küçük</option>
+                        <option value="3">Normal</option>
+                        <option value="5">Büyük</option>
+                    </select>
+                </div>
+                <div id="modal-dusunce-edit-editor" class="rich-editor" contenteditable="true"></div>
+                <input type="hidden" name="dusunce" id="modal-dusunce-edit-hidden">
+            </div>
+            <div class="form-group">
+                <label>Sayfa başlangıç</label>
+                <input type="number" name="sayfa_baslangic" id="modal-dusunce-edit-sb" min="1" placeholder="">
+            </div>
+            <div class="form-group">
+                <label>Sayfa bitiş</label>
+                <input type="number" name="sayfa_bitis" id="modal-dusunce-edit-sbit" min="1" placeholder="">
+            </div>
+            <button type="submit" class="btn btn-primary">Güncelle</button>
+            <button type="button" class="btn btn-cancel" onclick="closeModal('modal-dusunce-edit')">İptal</button>
+        </form>
+    </div>
+</div>
+<!-- Modal: PDF / Yazdır (alıntılar ve düşünceler) -->
+<div id="modal-pdf" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('modal-pdf')">&times;</span>
+        <div class="pdf-print-area">
+            <div class="pdf-header">
+                <div class="pdf-header-cover">
+                    <?php if (!empty($mevcut_kapak)): ?>
+                        <img src="assets/uploads/<?= htmlspecialchars($mevcut_kapak) ?>" alt="">
+                    <?php else: ?>
+                        <div class="pdf-header-cover-placeholder">Kapak yok</div>
+                    <?php endif; ?>
+                </div>
+                <div class="pdf-header-info">
+                    <h4><?= htmlspecialchars($baslik) ?></h4>
+                    <div class="pdf-meta">Yazar: <?= htmlspecialchars($yazar) ?></div>
+                    <div class="pdf-meta"><?= (int)$sayfa ? (int)$sayfa . ' sayfa' : '—' ?></div>
+                </div>
+            </div>
+            <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; color: #374151;">Alıntılar ve Düşünceler</h3>
+            <div class="pdf-print-body" id="pdf-print-body">
+                <?php foreach ($akis as $item):
+                    if ($item['tip'] === 'alinti'):
+                        $a = $item['veri'];
+                        $aid = (int)$a['id'];
+                        $alt_dusunceler = $dusunceler_by_alinti[$aid] ?? [];
+                ?>
+                <div class="akis-item alinti-item">
+                    <div class="alinti-metin"><?= kitap_richtext_html($a['alinti']) ?></div>
+                    <?php if (!empty($a['foto'])): ?>
+                        <div class="alinti-foto-wrap"><img src="alintilar/uploads/<?= htmlspecialchars($a['foto']) ?>" alt="Alıntı" class="alinti-foto-thumb" style="max-width:200px;"></div>
+                    <?php endif; ?>
+                    <div class="akis-meta-row">
+                        <?= date('d.m.Y H:i', $item['kayit']) ?>
+                        <?php if (!empty($a['sayfa_baslangic']) || !empty($a['sayfa_bitis'])): ?>
+                            · Sayfa <?= (int)$a['sayfa_baslangic'] ?><?= !empty($a['sayfa_bitis']) && $a['sayfa_bitis'] != $a['sayfa_baslangic'] ? '–' . (int)$a['sayfa_bitis'] : '' ?>
+                        <?php endif; ?>
+                    </div>
+                    <?php foreach ($alt_dusunceler as $d): ?>
+                    <div class="dusunce-alt">
+                        <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
+                        <div class="akis-meta-row">
+                            <?= date('d.m.Y H:i', strtotime($d['kayit'] ?? '')) ?>
+                            <?php if (!empty($d['sayfa_baslangic']) || !empty($d['sayfa_bitis'])): ?>
+                                · Sayfa <?= (int)($d['sayfa_baslangic'] ?? '') ?><?= !empty($d['sayfa_bitis']) ? '–' . (int)$d['sayfa_bitis'] : '' ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+                <?php else:
+                    $d = $item['veri'];
+                ?>
+                <div class="akis-item dusunce-standalone">
+                    <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
+                    <div class="akis-meta-row">
+                        <?= date('d.m.Y H:i', $item['kayit']) ?>
+                        <?php if (!empty($d['sayfa_baslangic']) || !empty($d['sayfa_bitis'])): ?>
+                            · Sayfa <?= (int)($d['sayfa_baslangic'] ?? '') ?><?= !empty($d['sayfa_bitis']) ? '–' . (int)$d['sayfa_bitis'] : '' ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endif; endforeach; ?>
+                <?php if (count($akis) === 0): ?>
+                <p style="color:#6b7280;">Henüz alıntı veya düşünce yok.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <div class="btn-yazdir-wrap" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-primary" onclick="window.print()">Yazdır</button>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<script>
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function toggleAccordion(id) {
+    var body = document.getElementById(id + '-body');
+    var toggle = document.getElementById(id + '-toggle');
+    var head = document.getElementById(id + '-head');
+    if (body && toggle) {
+        var isOpen = body.classList.contains('open');
+        body.classList.toggle('open', !isOpen);
+        head.setAttribute('aria-expanded', !isOpen ? 'true' : 'false');
+        toggle.textContent = body.classList.contains('open') ? '▲' : '▼';
+    }
+}
+function openPdfModal() {
+    openModal('modal-pdf');
+}
+function richCmd(editorId, cmd, ui, value) {
+    var el = document.getElementById(editorId);
+    if (el) { el.focus(); document.execCommand(cmd, ui || false, value || null); }
+}
+function syncRichToHidden(editorId, hiddenId) {
+    var ed = document.getElementById(editorId);
+    var hid = document.getElementById(hiddenId);
+    if (!ed || !hid) return true;
+    var html = ed.innerHTML.trim();
+    if (html === '' || html === '<br>') { alert('Metin alanı boş olamaz.'); return false; }
+    hid.value = html;
+    return true;
+}
+function openAlintiModal() {
+    document.getElementById('modal-alinti-title').textContent = 'Alıntı Ekle';
+    document.getElementById('form-alinti').querySelector('[name="action"]').value = 'alinti_ekle';
+    document.getElementById('alinti_id_edit').value = '';
+    document.getElementById('mevcut_foto').value = '';
+    document.getElementById('modal-alinti-editor').innerHTML = '';
+    document.getElementById('modal-alinti-sb').value = '';
+    document.getElementById('modal-alinti-sbit').value = '';
+    document.getElementById('modal-alinti-foto-preview').innerHTML = '';
+    document.getElementById('form-alinti').querySelector('input[name="foto"]').value = '';
+    openModal('modal-alinti');
+}
+function openAlintiEditModal(el) {
+    var a = JSON.parse(el.getAttribute('data-alinti-json'));
+    document.getElementById('modal-alinti-title').textContent = 'Alıntı Düzenle';
+    document.getElementById('form-alinti').querySelector('[name="action"]').value = 'alinti_guncelle';
+    document.getElementById('alinti_id_edit').value = a.id;
+    document.getElementById('mevcut_foto').value = a.foto || '';
+    document.getElementById('modal-alinti-editor').innerHTML = a.alinti || '';
+    document.getElementById('modal-alinti-sb').value = a.sayfa_baslangic || '';
+    document.getElementById('modal-alinti-sbit').value = a.sayfa_bitis || '';
+    var preview = document.getElementById('modal-alinti-foto-preview');
+    if (a.foto) {
+        preview.innerHTML = '<img src="alintilar/uploads/' + (a.foto || '') + '" alt="" style="max-width:120px; margin-top:8px;">';
+    } else { preview.innerHTML = ''; }
+    openModal('modal-alinti');
+}
+function openDusunceModal(alintiId, btn) {
+    var alintiData = btn && btn.getAttribute('data-alinti') ? JSON.parse(btn.getAttribute('data-alinti')) : null;
+    document.getElementById('modal-dusunce-title').textContent = alintiId ? 'Alıntıya düşünce ekle' : 'Düşünce Ekle';
+    document.getElementById('dusunce_alinti_id').value = alintiId || '';
+    document.getElementById('modal-dusunce-editor').innerHTML = '';
+    document.getElementById('modal-dusunce-sb').value = '';
+    document.getElementById('modal-dusunce-sbit').value = '';
+    var panel = document.getElementById('modal-dusunce-alinti-panel');
+    if (alintiId && alintiData) {
+        panel.style.display = 'block';
+        document.getElementById('modal-dusunce-alinti-text').innerHTML = alintiData.alinti_display || (function(t){ return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); })(alintiData.alinti);
+        var fotoDiv = document.getElementById('modal-dusunce-alinti-foto');
+        if (alintiData.foto) {
+            fotoDiv.innerHTML = '<img src="alintilar/uploads/' + alintiData.foto + '" alt="" style="max-width:140px; margin-top:8px;">';
+        } else { fotoDiv.innerHTML = ''; }
+    } else {
+        panel.style.display = 'none';
+    }
+    openModal('modal-dusunce');
+}
+function openDusunceEditModal(el) {
+    var d = JSON.parse(el.getAttribute('data-dusunce-json'));
+    document.getElementById('dusunce_edit_id').value = d.id;
+    document.getElementById('modal-dusunce-edit-editor').innerHTML = d.dusunce || '';
+    document.getElementById('modal-dusunce-edit-sb').value = d.sayfa_baslangic || '';
+    document.getElementById('modal-dusunce-edit-sbit').value = d.sayfa_bitis || '';
+    openModal('modal-dusunce-edit');
+}
+document.getElementById('kapak') && document.getElementById('kapak').addEventListener('change', function(e) {
+    var f = e.target.files[0];
+    var wrap = document.querySelector('.kitap-kapak-wrap');
+    if (!wrap || !f) return;
+    var r = new FileReader();
+    r.onload = function() {
+        var prev = document.getElementById('kitap-kapak-preview');
+        if (prev) prev.outerHTML = '<img src="' + r.result + '" alt="Kapak" id="kitap-kapak-preview">';
+    };
+    r.readAsDataURL(f);
+});
+</script>
+
+</body>
+</html>

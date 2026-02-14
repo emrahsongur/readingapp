@@ -1,0 +1,20 @@
+# Yapılandırma (veritabanı şifresi vb. – asla commit etme)
+config/config.php
+
+# Veritabanı dökümü (içinde veri olabilir)
+reading_app.sql
+
+# Yüklenen dosyalar (kapak ve alıntı fotoğrafları)
+assets/uploads/*
+!assets/uploads/.gitkeep
+alintilar/uploads/*
+!alintilar/uploads/.gitkeep
+
+# Opsiyonel: Cursor / proje kuralları (istersen kaldırabilirsin)
+.cursor/.RULES.MD
+RULES.UPDATED.MD
+
+# Genel
+.env
+*.log
+.DS_Store
