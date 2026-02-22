@@ -3,6 +3,10 @@
 Kişisel okuma takip web uygulaması. Okuduğunuz kitapları, okuma seanslarını, rafları (etiketleri) ve kitap başına alıntı ile düşüncelerinizi tek yerden yönetin.
 
 ---
+## Geliştirmeler
+### 22.02.2026
+- Kitapların kendine ait sayfasında düşünceler, alıntıların listesi tarih ve sayfa numarasına göre düzenlendi. Sayfaya içindekiler bölümü kondu. 
+- Okuma süresinin ölçüldüğü sayfada estetik geliştirmeler yapılıp tahmini bitiş süresi ve kitap için link eklendi. 
 
 ## ✨ Özellikler
 

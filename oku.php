@@ -81,6 +81,29 @@ $kitap_bitis_sayfa = (int)(isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa']
 if ($kitap_bitis_sayfa < 1) {
     $kitap_bitis_sayfa = (int)$kitap['sayfa'];
 }
+
+// Tahmini bitiş süresi: geçmiş seanslardan sayfa/saniye ortalaması
+$tahmini_bitis_metin = '';
+$stmtOku = $pdo->prepare("SELECT sure_saniye, baslama_sayfasi, bitis_sayfasi FROM okumalar WHERE book_id = ? AND user_id = ?");
+$stmtOku->execute([$book_id, $user_id]);
+$okumalar = $stmtOku->fetchAll(PDO::FETCH_ASSOC);
+$toplam_saniye = 0;
+$toplam_sayfa = 0;
+foreach ($okumalar as $o) {
+    $toplam_saniye += (int)$o['sure_saniye'];
+    $adet = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
+    if ($adet > 0) $toplam_sayfa += $adet;
+}
+$kalan_sayfa = max(0, $kitap_bitis_sayfa - $baslama_sayfasi);
+if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
+    $saniye_per_sayfa = $toplam_saniye / $toplam_sayfa;
+    $tahmini_saniye = (int) round($kalan_sayfa * $saniye_per_sayfa);
+    $tahmini_bitis_ts = time() + $tahmini_saniye;
+    $tahmini_bitis_metin = date('H:i', $tahmini_bitis_ts);
+    if (date('Y-m-d', $tahmini_bitis_ts) !== date('Y-m-d')) {
+        $tahmini_bitis_metin = date('d.m.Y', $tahmini_bitis_ts) . ' ' . $tahmini_bitis_metin;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="tr">
@@ -89,12 +112,26 @@ if ($kitap_bitis_sayfa < 1) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Okuma Seansı - <?= htmlspecialchars($kitap['baslik']) ?></title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #111827; color: #f3f4f6; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
-        .top-bar { padding: 1rem; background-color: #1f2937; box-shadow: 0 2px 4px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #f3f4f6; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; position: relative; background-color: #111827; }
+        body.has-cover::before {
+            content: ''; position: fixed; inset: 0; z-index: 0;
+            background-image: url('assets/uploads/<?= !empty($kitap['kapak']) ? htmlspecialchars($kitap['kapak']) : '' ?>');
+            background-size: cover; background-position: center;
+            background-repeat: no-repeat;
+        }
+        body.has-cover::after {
+            content: ''; position: fixed; inset: 0; z-index: 1;
+            background: rgba(0, 0, 0, 0.65);
+        }
+        body.has-cover .top-bar, body.has-cover .timer-container, body.has-cover .modal-overlay { position: relative; z-index: 2; }
+        .top-bar { padding: 1rem; background-color: rgba(31, 41, 55, 0.85); box-shadow: 0 2px 4px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 1rem; justify-content: center; flex-wrap: wrap; }
         .top-bar-cover { width: 56px; height: 84px; object-fit: cover; border-radius: 6px; background-color: #374151; }
         .top-bar-text { text-align: center; }
-        .top-bar h2 { margin: 0; font-size: 1.2rem; color: #60a5fa; }
+        .top-bar h2 { margin: 0; font-size: 1.2rem; }
+        .top-bar h2 a { color: #60a5fa; text-decoration: none; }
+        .top-bar h2 a:hover { text-decoration: underline; }
         .top-bar p { margin: 0.2rem 0 0 0; font-size: 0.9rem; color: #9ca3af; }
+        .top-bar .tahmini-bitis { font-size: 0.85rem; color: #93c5fd; margin-top: 0.15rem; font-weight: 600; }
         
         .timer-container { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; }
         .timer-row { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-bottom: 2rem; }
@@ -127,15 +164,18 @@ if ($kitap_bitis_sayfa < 1) {
         .status-text { text-align: center; color: #10b981; margin-bottom: 1rem; font-weight: bold; height: 1.5rem; }
     </style>
 </head>
-<body>
+<body<?= !empty($kitap['kapak']) ? ' class="has-cover"' : '' ?>>
 
 <div class="top-bar">
     <?php if (!empty($kitap['kapak'])): ?>
         <img src="assets/uploads/<?= htmlspecialchars($kitap['kapak']) ?>" class="top-bar-cover" alt="">
     <?php endif; ?>
     <div class="top-bar-text">
-        <h2><?= htmlspecialchars($kitap['baslik']) ?></h2>
+        <h2><a href="kitap.php?id=<?= (int)$book_id ?>" target="_blank" rel="noopener"><?= htmlspecialchars($kitap['baslik']) ?></a></h2>
         <p><?= htmlspecialchars($kitap['yazar']) ?> &bull; Başlangıç: Sayfa <?= $baslama_sayfasi ?></p>
+        <?php if ($tahmini_bitis_metin !== ''): ?>
+        <p class="tahmini-bitis">Tahmini bitiş: <?= htmlspecialchars($tahmini_bitis_metin) ?></p>
+        <?php endif; ?>
     </div>
 </div>
 

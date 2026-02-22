@@ -252,21 +252,44 @@ if ($kitap_id > 0) {
     $alintilar = alintilar_for_kitap($pdo, $kitap_id);
     $dusunceler = dusunceler_for_kitap($pdo, $kitap_id);
     $dusunceler_by_alinti = [];
-    $standalone_dusunceler = [];
+    $standalone_sayfasiz = [];  // sayfa numarası yok, alıntıya bağlı değil → tarih ASC
+    $standalone_sayfali = [];  // sayfa var, alıntıya bağlı değil → sayfa ASC
     foreach ($dusunceler as $d) {
         if (!empty($d['alinti_id'])) {
             $dusunceler_by_alinti[(int)$d['alinti_id']][] = $d;
         } else {
-            $standalone_dusunceler[] = $d;
+            $sb = isset($d['sayfa_baslangic']) && $d['sayfa_baslangic'] !== '' && $d['sayfa_baslangic'] !== null ? (int)$d['sayfa_baslangic'] : null;
+            $sbit = isset($d['sayfa_bitis']) && $d['sayfa_bitis'] !== '' && $d['sayfa_bitis'] !== null ? (int)$d['sayfa_bitis'] : null;
+            if ($sb === null && $sbit === null) {
+                $standalone_sayfasiz[] = $d;
+            } else {
+                $standalone_sayfali[] = $d;
+            }
         }
+    }
+    usort($standalone_sayfasiz, function ($x, $y) { return strcmp($x['kayit'], $y['kayit']); });
+    usort($standalone_sayfali, function ($x, $y) {
+        $sx = (int)($x['sayfa_baslangic'] ?? 0) ?: (int)($x['sayfa_bitis'] ?? 0);
+        $sy = (int)($y['sayfa_baslangic'] ?? 0) ?: (int)($y['sayfa_bitis'] ?? 0);
+        return $sx - $sy;
+    });
+    usort($alintilar, function ($a, $b) {
+        $sa = (int)($a['sayfa_baslangic'] ?? 0) ?: (int)($a['sayfa_bitis'] ?? 0) ?: 999999;
+        $sb = (int)($b['sayfa_baslangic'] ?? 0) ?: (int)($b['sayfa_bitis'] ?? 0) ?: 999999;
+        return $sa - $sb;
+    });
+    foreach ($dusunceler_by_alinti as $aid => $list) {
+        usort($dusunceler_by_alinti[$aid], function ($x, $y) { return strcmp($x['kayit'], $y['kayit']); });
+    }
+    foreach ($standalone_sayfasiz as $d) {
+        $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
+    }
+    foreach ($standalone_sayfali as $d) {
+        $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
     }
     foreach ($alintilar as $a) {
         $akis[] = ['tip' => 'alinti', 'kayit' => strtotime($a['kayit']), 'veri' => $a];
     }
-    foreach ($standalone_dusunceler as $d) {
-        $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
-    }
-    usort($akis, function ($x, $y) { return $x['kayit'] - $y['kayit']; });
 
     // Bu kitaba ait okuma seansları (tek tablo, gruplama yok)
     $kitap_okumalari = [];
@@ -363,7 +386,22 @@ function kitap_richtext_html($html) {
         .user-info .nav-btn-secondary:hover { background-color: #059669 !important; color: white !important; }
         .user-info .btn-logout { color: #dc2626; background-color: transparent; }
         .user-info .btn-logout:hover { background-color: #fef2f2; color: #b91c1c; }
+        .main-wrap { display: flex; gap: 1.5rem; max-width: 1140px; margin: 2rem auto; padding: 0 1.5rem; align-items: flex-start; }
+        .main-wrap .container { flex: 1; min-width: 0; margin: 0; }
         .container { max-width: 900px; margin: 2rem auto; padding: 1.5rem; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.08); overflow: hidden; }
+        .toc-sidebar {
+            width: 200px; flex-shrink: 0; padding: 1rem;
+            background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            position: sticky; top: 2rem; max-height: calc(100vh - 4rem); overflow-y: auto;
+        }
+        .toc-sidebar .toc-title { font-size: 0.8rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+        .toc-sidebar ul { list-style: none; margin: 0; padding: 0; }
+        .toc-sidebar li { margin-bottom: 0.35rem; }
+        .toc-sidebar li.toc-sub { margin-left: 0.75rem; margin-bottom: 0.25rem; }
+        .toc-sidebar a { font-size: 0.8rem; color: #2563eb; text-decoration: none; display: block; padding: 0.2rem 0; border-radius: 4px; }
+        .toc-sidebar a:hover { background: #e0e7ff; color: #1d4ed8; }
+        @media print { .toc-sidebar { display: none !important; } .main-wrap .container { margin: 0 auto !important; } }
         .kitap-bilgi-wrap { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: flex-start; }
         .kitap-kapak-wrap { flex-shrink: 0; width: 280px; }
         .kitap-kapak-wrap img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: block; }
@@ -526,6 +564,9 @@ function kitap_richtext_html($html) {
     </div>
 </nav>
 
+<?php if ($kitap_id > 0 && count($akis) > 0): ?>
+<div class="main-wrap">
+<?php endif; ?>
 <div class="container">
     <h2><?= $kitap_id > 0 ? 'Kitap Düzenle' : 'Yeni Kitap Ekle' ?></h2>
 
@@ -685,7 +726,7 @@ function kitap_richtext_html($html) {
                 $aid = (int)$a['id'];
                 $alt_dusunceler = $dusunceler_by_alinti[$aid] ?? [];
         ?>
-        <div class="akis-item alinti-item">
+        <div class="akis-item alinti-item" id="alinti-<?= $aid ?>">
             <div class="alinti-metin"><?= kitap_richtext_html($a['alinti']) ?></div>
             <?php if (!empty($a['foto'])): ?>
                 <div class="alinti-foto-wrap"><img src="alintilar/uploads/<?= htmlspecialchars($a['foto']) ?>" alt="Alıntı" class="alinti-foto-thumb"></div>
@@ -709,7 +750,7 @@ function kitap_richtext_html($html) {
                 </div>
             </div>
             <?php foreach ($alt_dusunceler as $d): ?>
-            <div class="dusunce-alt">
+            <div class="dusunce-alt" id="dusunce-<?= (int)$d['id'] ?>">
                 <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
                 <div class="akis-actions-row">
                     <div class="akis-actions">
@@ -734,7 +775,7 @@ function kitap_richtext_html($html) {
         <?php else:
             $d = $item['veri'];
         ?>
-        <div class="akis-item dusunce-standalone">
+        <div class="akis-item dusunce-standalone" id="dusunce-<?= (int)$d['id'] ?>">
             <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
             <div class="akis-actions-row">
                 <div class="akis-actions">
@@ -761,6 +802,42 @@ function kitap_richtext_html($html) {
     </div>
     <?php endif; ?>
 </div>
+<?php if ($kitap_id > 0 && count($akis) > 0): ?>
+<nav class="toc-sidebar" aria-label="İçindekiler">
+    <div class="toc-title">İçindekiler</div>
+    <ul>
+        <?php
+        $alinti_no = 0;
+        foreach ($akis as $item):
+            if ($item['tip'] === 'alinti'):
+                $a = $item['veri'];
+                $aid = (int)$a['id'];
+                $alinti_no++;
+                $sayfa_a = (int)($a['sayfa_baslangic'] ?? 0) ?: (int)($a['sayfa_bitis'] ?? 0);
+                $alt_dusunceler = $dusunceler_by_alinti[$aid] ?? [];
+        ?>
+        <li>
+            <a href="#alinti-<?= $aid ?>"><?= $sayfa_a ? 'Alıntı ' . $alinti_no . ' · Sayfa ' . $sayfa_a : 'Alıntı ' . $alinti_no ?></a>
+        </li>
+            <?php foreach ($alt_dusunceler as $d):
+                $sayfa_d = (int)($d['sayfa_baslangic'] ?? 0) ?: (int)($d['sayfa_bitis'] ?? 0);
+            ?>
+        <li class="toc-sub">
+            <a href="#dusunce-<?= (int)$d['id'] ?>"><?= $sayfa_d ? 'Sayfa ' . $sayfa_d : 'Düşünce' ?></a>
+        </li>
+            <?php endforeach; ?>
+        <?php else:
+            $d = $item['veri'];
+            $sayfa_d = (int)($d['sayfa_baslangic'] ?? 0) ?: (int)($d['sayfa_bitis'] ?? 0);
+        ?>
+        <li>
+            <a href="#dusunce-<?= (int)$d['id'] ?>"><?= $sayfa_d ? 'Sayfa ' . $sayfa_d : 'Düşünce' ?></a>
+        </li>
+        <?php endif; endforeach; ?>
+    </ul>
+</nav>
+</div>
+<?php endif; ?>
 
 <?php if ($kitap_id > 0): ?>
 <!-- Modal: Alıntı Ekle -->
@@ -918,7 +995,7 @@ function kitap_richtext_html($html) {
                         $aid = (int)$a['id'];
                         $alt_dusunceler = $dusunceler_by_alinti[$aid] ?? [];
                 ?>
-                <div class="akis-item alinti-item">
+                <div class="akis-item alinti-item" id="alinti-<?= $aid ?>">
                     <div class="alinti-metin"><?= kitap_richtext_html($a['alinti']) ?></div>
                     <?php if (!empty($a['foto'])): ?>
                         <div class="alinti-foto-wrap"><img src="alintilar/uploads/<?= htmlspecialchars($a['foto']) ?>" alt="Alıntı" class="alinti-foto-thumb" style="max-width:200px;"></div>
@@ -930,7 +1007,7 @@ function kitap_richtext_html($html) {
                         <?php endif; ?>
                     </div>
                     <?php foreach ($alt_dusunceler as $d): ?>
-                    <div class="dusunce-alt">
+                    <div class="dusunce-alt" id="dusunce-<?= (int)$d['id'] ?>">
                         <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
                         <div class="akis-meta-row">
                             <?= date('d.m.Y H:i', strtotime($d['kayit'] ?? '')) ?>
@@ -944,7 +1021,7 @@ function kitap_richtext_html($html) {
                 <?php else:
                     $d = $item['veri'];
                 ?>
-                <div class="akis-item dusunce-standalone">
+                <div class="akis-item dusunce-standalone" id="dusunce-<?= (int)$d['id'] ?>">
                     <div class="dusunce-metin"><?= kitap_richtext_html($d['dusunce']) ?></div>
                     <div class="akis-meta-row">
                         <?= date('d.m.Y H:i', $item['kayit']) ?>
