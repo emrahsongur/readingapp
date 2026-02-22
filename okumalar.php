@@ -89,6 +89,20 @@ try {
     $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
     $stmt->execute();
     $okumalar = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Filtrelenen tüm seanslar için toplam/ortalama (sayfalama dışı)
+    $stmtToplam = $pdo->prepare("
+        SELECT COUNT(*) as adet,
+               COALESCE(SUM(o.sure_saniye), 0) as toplam_saniye,
+               COALESCE(SUM(GREATEST(0, COALESCE(o.bitis_sayfasi, o.baslama_sayfasi) - o.baslama_sayfasi + 1)), 0) as toplam_sayfa
+        FROM okumalar o
+        WHERE o.user_id = :user_id
+          AND DATE(o.baslama) >= :baslangic
+          AND DATE(o.baslama) <= :bitis
+          $where_kitap
+    ");
+    $stmtToplam->execute($params_count);
+    $genel_toplam = $stmtToplam->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     die("Veritabanı hatası: " . $e->getMessage());
 }
@@ -133,78 +147,7 @@ function sure_format_ddss($saniye) {
             padding: 0;
             color: #1f2937;
         }
-        .navbar {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid rgba(0,0,0,0.06);
-        }
-        .navbar h1 { margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
-        .navbar h1 a {
-            color: #1e40af;
-            text-decoration: none;
-            transition: color 0.2s ease;
-        }
-        .navbar h1 a:hover { color: #2563eb; }
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .user-info a {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            text-decoration: none;
-            color: #475569;
-            transition: background-color 0.2s ease, color 0.2s ease;
-        }
-        .user-info a[href="kitaplar.php"]:hover,
-        .user-info a[href="raflar.php"]:hover {
-            background-color: #f1f5f9;
-            color: #1e293b;
-        }
-        .user-info a[href="okumalar.php"]:hover {
-            background-color: #f1f5f9;
-            color: #1e293b;
-        }
-        .user-info .nav-current {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: #1e293b;
-            background-color: #e2e8f0;
-        }
-        .user-info .nav-btn-primary {
-            background-color: #2563eb;
-            color: white !important;
-        }
-        .user-info .nav-btn-primary:hover {
-            background-color: #1d4ed8 !important;
-            color: white !important;
-        }
-        .user-info .nav-btn-secondary {
-            background-color: #10b981;
-            color: white !important;
-        }
-        .user-info .nav-btn-secondary:hover {
-            background-color: #059669 !important;
-            color: white !important;
-        }
-        .user-info .btn-logout {
-            color: #dc2626;
-            background-color: transparent;
-        }
-        .user-info .btn-logout:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-        }
-        .container { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+        .container { width: 80%; max-width: 1400px; margin: 2rem auto; padding: 0 1rem; box-sizing: border-box; }
         .day-group {
             background-color: white;
             border-radius: 8px;
@@ -269,22 +212,17 @@ function sure_format_ddss($saniye) {
         .pagination a:hover { background: #eff6ff; }
         .pagination .current { background: #2563eb; color: white; border-color: #2563eb; }
         .pagination .disabled { color: #9ca3af; pointer-events: none; }
+        .genel-ozet {
+            margin-top: 2rem; padding: 1.25rem 1.5rem; background: #f0fdf4; border: 1px solid #bbf7d0;
+            border-radius: 8px; font-weight: 600; color: #166534;
+            display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: center;
+        }
+        .genel-ozet .label { font-weight: 700; color: #14532d; }
     </style>
 </head>
 <body>
 
-<nav class="navbar">
-    <h1><a href="index.php">Reading App</a></h1>
-    <div class="user-info">
-        <a href="kitaplar.php">Kitaplar</a>
-        <a href="raflar.php">Raflar</a>
-        <span class="nav-current">Okumalar</span>
-        <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
-        <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
-        <a href="ayarlar.php">Ayarlar</a>
-        <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
-    </div>
-</nav>
+<?php $nav_current = 'okumalar'; include __DIR__ . '/includes/nav.php'; ?>
 
 <div class="container">
     <h2 style="margin-top: 0;">Okuma Seansları</h2>
@@ -306,11 +244,12 @@ function sure_format_ddss($saniye) {
     </form>
 
     <?php if (count($gunlere_gore) > 0): ?>
-        <?php foreach ($gunlere_gore as $gun => $veri): ?>
-            <?php
+        <?php
+        $gun_adi = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+        foreach ($gunlere_gore as $gun => $veri):
             $gun_tarih = new DateTime($gun);
             $aylar = ['', 'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
-            $gun_etiket = $gun_tarih->format('j') . ' ' . $aylar[(int) $gun_tarih->format('n')] . ' ' . $gun_tarih->format('Y');
+            $gun_etiket = $gun_tarih->format('j') . ' ' . $aylar[(int) $gun_tarih->format('n')] . ' ' . $gun_tarih->format('Y') . ' – ' . $gun_adi[(int) $gun_tarih->format('w')];
             $gun_toplam_sayfa = (int) ($veri['toplam_sayfa'] ?? 0);
             $gun_ortalama_ddss = $gun_toplam_sayfa > 0 ? sure_format_ddss((int) round($veri['toplam_saniye'] / $gun_toplam_sayfa)) : '—';
             ?>
@@ -379,6 +318,21 @@ function sure_format_ddss($saniye) {
                 </div>
             </section>
         <?php endforeach; ?>
+
+        <?php if (!empty($genel_toplam) && (int)($genel_toplam['adet'] ?? 0) > 0): ?>
+            <?php
+            $gt_saniye = (int)($genel_toplam['toplam_saniye'] ?? 0);
+            $gt_sayfa = (int)($genel_toplam['toplam_sayfa'] ?? 0);
+            $gt_ortalama_ddss = $gt_sayfa > 0 ? sure_format_ddss((int) round($gt_saniye / $gt_sayfa)) : '—';
+            ?>
+            <div class="genel-ozet">
+                <span class="label">Filtrelenen tüm seanslar:</span>
+                <span><?= (int) $genel_toplam['adet'] ?> seans</span>
+                <span>Toplam süre: <?= sure_format_ssddss($gt_saniye) ?></span>
+                <span>Toplam sayfa: <?= $gt_sayfa ?></span>
+                <span>Sayfa başı ortalama: <?= $gt_ortalama_ddss ?></span>
+            </div>
+        <?php endif; ?>
     <?php else: ?>
         <div class="empty-state">
             <h3>Henüz okuma seansı kaydı yok.</h3>

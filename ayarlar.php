@@ -44,25 +44,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <title>Ayarlar - Reading App</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9fafb; margin: 0; padding: 0; color: #1f2937; }
-        .navbar {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04);
-            display: flex; justify-content: space-between; align-items: center;
-            border-bottom: 1px solid rgba(0,0,0,0.06);
-        }
-        .navbar h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
-        .navbar h1 a { color: #1e40af; text-decoration: none; }
-        .navbar h1 a:hover { color: #2563eb; }
-        .user-info { display: flex; align-items: center; gap: 0.5rem; }
-        .user-info a {
-            padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 500;
-            text-decoration: none; color: #475569;
-        }
-        .user-info a:hover { background-color: #f1f5f9; color: #1e293b; }
-        .user-info .nav-btn-primary { background-color: #2563eb; color: white !important; }
-        .user-info .nav-btn-secondary { background-color: #10b981; color: white !important; }
-        .user-info .btn-logout { color: #dc2626; }
         .container { max-width: 560px; margin: 2rem auto; padding: 1.5rem; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.08); }
         h2 { margin: 0 0 1rem 0; color: #1e293b; font-size: 1.25rem; }
         .form-group { margin-bottom: 1.25rem; }
@@ -83,18 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
 
-<nav class="navbar">
-    <h1><a href="index.php">Reading App</a></h1>
-    <div class="user-info">
-        <a href="kitaplar.php">Kitaplar</a>
-        <a href="raflar.php">Raflar</a>
-        <a href="okumalar.php">Okumalar</a>
-        <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
-        <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
-        <a href="ayarlar.php">Ayarlar</a>
-        <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
-    </div>
-</nav>
+<?php $nav_current = 'ayarlar'; include __DIR__ . '/includes/nav.php'; ?>
 
 <div class="container">
     <h2>Ayarlar</h2>

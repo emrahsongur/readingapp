@@ -174,6 +174,8 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         .btn-pause { background-color: #f59e0b; display: none; }
         .btn-stop { background-color: #ef4444; width: 100%; margin-top: 1rem; flex: none; }
         .btn-cancel { background-color: #4b5563; text-decoration: none; display: block; text-align: center; margin-top: 1rem; font-size: 1rem; padding: 1rem; border-radius: 8px; }
+        .btn-ana-sayfa { display: block; width: 100%; margin-top: 0.5rem; padding: 0.75rem; font-size: 0.95rem; background: #374151; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; }
+        .btn-ana-sayfa:hover { background: #4b5563; }
         .btn-reset { background-color: #6b7280; width: 100%; margin-top: 0.5rem; flex: none; display: none; }
         .btn-reset.visible { display: block; }
         
@@ -236,6 +238,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         <button type="button" class="btn btn-alinti" id="alintiEkleBtn">📷 Alıntı Ekle</button>
         <button type="button" class="btn btn-reset" id="resetBtn">Yeni seans başlat</button>
         <a href="index.php" class="btn-cancel" onclick="return confirmExit();">Vazgeç ve Çık</a>
+        <button type="button" class="btn btn-ana-sayfa" id="anaSayfaBtn">Ana Sayfa</button>
     </div>
 </div>
 
@@ -635,6 +638,15 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
             return confirm("Kaydedilmemiş okuma süreniz var. Çıkmak istediğinize emin misiniz?");
         }
         return true;
+    }
+
+    // Ana Sayfa butonu: yanlışlıkla tıklamada sayaç durmasın diye onay iste
+    const anaSayfaBtn = document.getElementById('anaSayfaBtn');
+    if (anaSayfaBtn) {
+        anaSayfaBtn.addEventListener('click', function() {
+            if (!confirm('Ana sayfaya dönmek istediğinize emin misiniz? (Seansınız arka planda kayıtlı kalır.)')) return;
+            window.location.href = 'index.php';
+        });
     }
 
     // --- 5. HEARTBEAT ---

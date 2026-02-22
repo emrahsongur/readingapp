@@ -71,74 +71,6 @@ function sure_format_ssddss($saniye) {
             padding: 0;
             color: #1f2937;
         }
-        .navbar {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid rgba(0,0,0,0.06);
-        }
-        .navbar h1 { margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
-        .navbar h1 a {
-            color: #1e40af;
-            text-decoration: none;
-            transition: color 0.2s ease;
-        }
-        .navbar h1 a:hover { color: #2563eb; }
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .user-info a {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            text-decoration: none;
-            color: #475569;
-            transition: background-color 0.2s ease, color 0.2s ease;
-        }
-        .user-info a[href="kitaplar.php"]:hover,
-        .user-info a[href="raflar.php"]:hover,
-        .user-info a[href="okumalar.php"]:hover {
-            background-color: #f1f5f9;
-            color: #1e293b;
-        }
-        .user-info .nav-current {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: #1e293b;
-            background-color: #e2e8f0;
-        }
-        .user-info .nav-btn-primary {
-            background-color: #2563eb;
-            color: white !important;
-        }
-        .user-info .nav-btn-primary:hover {
-            background-color: #1d4ed8 !important;
-            color: white !important;
-        }
-        .user-info .nav-btn-secondary {
-            background-color: #10b981;
-            color: white !important;
-        }
-        .user-info .nav-btn-secondary:hover {
-            background-color: #059669 !important;
-            color: white !important;
-        }
-        .user-info .btn-logout {
-            color: #dc2626;
-            background-color: transparent;
-        }
-        .user-info .btn-logout:hover {
-            background-color: #fef2f2;
-            color: #b91c1c;
-        }
         .container { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
         .shelf-section {
             background-color: white;
@@ -269,18 +201,7 @@ function sure_format_ssddss($saniye) {
 </head>
 <body>
 
-<nav class="navbar">
-    <h1><a href="index.php">Reading App</a></h1>
-    <div class="user-info">
-        <a href="kitaplar.php">Kitaplar</a>
-        <span class="nav-current">Raflar</span>
-        <a href="okumalar.php">Okumalar</a>
-        <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
-        <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
-        <a href="ayarlar.php">Ayarlar</a>
-        <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
-    </div>
-</nav>
+<?php $nav_current = 'raflar'; include __DIR__ . '/includes/nav.php'; ?>
 
 <div class="container">
     <h2 style="margin-top: 0;">Raflar</h2>

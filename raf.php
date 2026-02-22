@@ -136,16 +136,12 @@ $raflarListesi = $stmtRaflar->fetchAll();
         .alert-error { background-color: #fee2e2; color: #b91c1c; }
         .alert-success { background-color: #d1fae5; color: #065f46; }
         
-        .top-nav { margin-bottom: 2rem; }
-        .top-nav a { color: #4b5563; text-decoration: none; font-weight: bold; }
-        .top-nav a:hover { color: #2563eb; }
+        .grid-container { margin-top: 1.5rem; }
     </style>
 </head>
 <body>
 
-<div class="top-nav">
-    <a href="index.php">&larr; Ana Sayfaya Dön</a>
-</div>
+<?php $nav_current = ''; include __DIR__ . '/includes/nav.php'; ?>
 
 <div class="grid-container">
     

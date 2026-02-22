@@ -381,30 +381,6 @@ function kitap_richtext_html($html) {
     <title><?= $kitap_id > 0 ? 'Kitap Düzenle' : 'Yeni Kitap Ekle' ?> - Reading App</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9fafb; margin: 0; padding: 0; color: #1f2937; }
-        .navbar {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04);
-            display: flex; justify-content: space-between; align-items: center;
-            border-bottom: 1px solid rgba(0,0,0,0.06);
-        }
-        .navbar h1 { margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
-        .navbar h1 a { color: #1e40af; text-decoration: none; transition: color 0.2s ease; }
-        .navbar h1 a:hover { color: #2563eb; }
-        .user-info { display: flex; align-items: center; gap: 0.5rem; }
-        .user-info a {
-            padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 500;
-            text-decoration: none; color: #475569; transition: background-color 0.2s ease, color 0.2s ease;
-        }
-        .user-info a[href="kitaplar.php"]:hover, .user-info a[href="raflar.php"]:hover, .user-info a[href="okumalar.php"]:hover {
-            background-color: #f1f5f9; color: #1e293b;
-        }
-        .user-info .nav-btn-primary { background-color: #2563eb; color: white !important; }
-        .user-info .nav-btn-primary:hover { background-color: #1d4ed8 !important; color: white !important; }
-        .user-info .nav-btn-secondary { background-color: #10b981; color: white !important; }
-        .user-info .nav-btn-secondary:hover { background-color: #059669 !important; color: white !important; }
-        .user-info .btn-logout { color: #dc2626; background-color: transparent; }
-        .user-info .btn-logout:hover { background-color: #fef2f2; color: #b91c1c; }
         .main-wrap { display: flex; gap: 1.5rem; max-width: 1140px; margin: 2rem auto; padding: 0 1.5rem; align-items: flex-start; }
         .main-wrap .container { flex: 1; min-width: 0; margin: 0; }
         .container { max-width: 900px; margin: 2rem auto; padding: 1.5rem; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.08); overflow: hidden; }
@@ -420,6 +396,14 @@ function kitap_richtext_html($html) {
         .toc-sidebar li.toc-sub { margin-left: 0.75rem; margin-bottom: 0.25rem; }
         .toc-sidebar a { font-size: 0.8rem; color: #2563eb; text-decoration: none; display: block; padding: 0.2rem 0; border-radius: 4px; }
         .toc-sidebar a:hover { background: #e0e7ff; color: #1d4ed8; }
+        @media (max-width: 768px) {
+            .main-wrap { flex-direction: column; padding: 0 0.75rem; margin: 1rem auto; }
+            .main-wrap .container { width: 100%; }
+            .toc-sidebar { width: 100%; max-width: 100%; position: static; max-height: none; margin-top: 1rem; }
+            .kitap-bilgi-wrap { flex-direction: column; }
+            .kitap-kapak-wrap { width: 100%; max-width: 280px; margin: 0 auto; }
+            .kitap-form-grid { grid-template-columns: 1fr; }
+        }
         @media print { .toc-sidebar { display: none !important; } .main-wrap .container { margin: 0 auto !important; } }
         .kitap-bilgi-wrap { display: flex; gap: 1.5rem; padding: 1.5rem; align-items: flex-start; }
         .kitap-kapak-wrap { flex-shrink: 0; width: 280px; }
@@ -580,18 +564,7 @@ function kitap_richtext_html($html) {
 </head>
 <body>
 
-<nav class="navbar">
-    <h1><a href="index.php">Reading App</a></h1>
-    <div class="user-info">
-        <a href="kitaplar.php">Kitaplar</a>
-        <a href="raflar.php">Raflar</a>
-        <a href="okumalar.php">Okumalar</a>
-        <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
-        <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
-        <a href="ayarlar.php">Ayarlar</a>
-        <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
-    </div>
-</nav>
+<?php $nav_current = ''; include __DIR__ . '/includes/nav.php'; ?>
 
 <?php if ($kitap_id > 0 && count($akis) > 0): ?>
 <div class="main-wrap">
