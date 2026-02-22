@@ -16,6 +16,33 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 
+// 1b. ALINTI FOTO YÜKLEME (POST, JSON yanıt – sayfa yenilenmez, sayaç durmaz)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'alinti_foto_upload') {
+    header('Content-Type: application/json; charset=utf-8');
+    $upload_book_id = isset($_POST['book_id']) ? (int)$_POST['book_id'] : 0;
+    if ($upload_book_id < 1) {
+        echo json_encode(['ok' => false, 'error' => 'Geçersiz kitap.']);
+        exit;
+    }
+    require_once __DIR__ . '/alintilar/bootstrap.php';
+    if (!kitap_kullaniciya_ait($pdo, $upload_book_id, $user_id)) {
+        echo json_encode(['ok' => false, 'error' => 'Kitap bulunamadı veya yetkiniz yok.']);
+        exit;
+    }
+    if (empty($_FILES['foto']['tmp_name']) || $_FILES['foto']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['ok' => false, 'error' => 'Fotoğraf yüklenemedi.']);
+        exit;
+    }
+    $err = alinti_ekle($pdo, $user_id, $upload_book_id, '', null, null, $_FILES['foto']);
+    if ($err !== null) {
+        echo json_encode(['ok' => false, 'error' => $err]);
+        exit;
+    }
+    $alinti_id = (int) $pdo->lastInsertId();
+    echo json_encode(['ok' => true, 'alinti_id' => $alinti_id]);
+    exit;
+}
+
 // 2. SEANS KAYDETME İŞLEMİ (POST)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'save_session') {
     $book_id = (int)$_POST['book_id'];
@@ -162,6 +189,17 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         .btn-close { background-color: #d1d5db; color: #1f2937; border: none; padding: 1rem; border-radius: 8px; font-weight: bold; font-size: 1.1rem; flex: 1; cursor: pointer; }
         
         .status-text { text-align: center; color: #10b981; margin-bottom: 1rem; font-weight: bold; height: 1.5rem; }
+        .btn-alinti { background-color: #6366f1; margin-top: 0.5rem; flex: none; width: 100%; }
+        .btn-alinti:hover { background-color: #4f46e5; }
+        #alintiModal .modal { max-width: 420px; }
+        #alintiModal .alinti-preview-wrap { margin: 1rem 0; text-align: center; max-height: 280px; overflow: hidden; border-radius: 8px; background: #f3f4f6; }
+        #alintiModal .alinti-preview-wrap img { max-width: 100%; max-height: 260px; object-fit: contain; display: block; margin: 0 auto; }
+        #alintiModal .alinti-crop-canvas-wrap { display: none; margin: 0.5rem 0; position: relative; touch-action: none; }
+        #alintiModal .alinti-crop-canvas-wrap.active { display: block; }
+        #alintiModal .alinti-crop-canvas-wrap canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; border: 2px solid #6366f1; border-radius: 6px; }
+        #alintiModal .alinti-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+        #alintiModal .alinti-actions button { flex: 1; min-width: 120px; padding: 0.6rem; font-size: 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; }
+        #alintiModal .alinti-file-input { display: none; }
     </style>
 </head>
 <body<?= !empty($kitap['kapak']) ? ' class="has-cover"' : '' ?>>
@@ -195,8 +233,35 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     </div>
     
     <div style="width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box;">
+        <button type="button" class="btn btn-alinti" id="alintiEkleBtn">📷 Alıntı Ekle</button>
         <button type="button" class="btn btn-reset" id="resetBtn">Yeni seans başlat</button>
         <a href="index.php" class="btn-cancel" onclick="return confirmExit();">Vazgeç ve Çık</a>
+    </div>
+</div>
+
+<div class="modal-overlay" id="alintiModal" style="display:none;">
+    <div class="modal">
+        <h3>Alıntı – Sayfa fotoğrafı</h3>
+        <p style="color:#4b5563; font-size:0.9rem;">Sayfanın fotoğrafını çekin veya galeriden seçin. İsterseniz alanı kırpabilirsiniz.</p>
+        <input type="file" id="alintiFileInput" class="alinti-file-input" accept="image/*" capture="environment">
+        <div class="alinti-preview-wrap" id="alintiPreviewWrap" style="display:none;">
+            <img id="alintiPreviewImg" alt="Önizleme">
+        </div>
+        <div class="alinti-crop-canvas-wrap" id="alintiCropWrap">
+            <canvas id="alintiCropCanvas"></canvas>
+            <p style="font-size:0.8rem; color:#6b7280; margin-top:0.35rem;">Dikdörtgen çizmek için sürükleyin</p>
+        </div>
+        <div class="alinti-actions" id="alintiActions" style="display:none;">
+            <button type="button" id="alintiUploadFullBtn" style="background:#10b981; color:white;">Yükle (kırpma yok)</button>
+            <button type="button" id="alintiCropBtn" style="background:#6366f1; color:white;">Kırp</button>
+        </div>
+        <div class="alinti-actions" id="alintiCropActions" style="display:none;">
+            <button type="button" id="alintiUploadCropBtn" style="background:#10b981; color:white;">Seçili alanı yükle</button>
+            <button type="button" id="alintiCropCancelBtn" style="background:#6b7280; color:white;">İptal</button>
+        </div>
+        <div class="modal-buttons" style="margin-top:1rem;">
+            <button type="button" class="btn-close" id="alintiModalCloseBtn">Kapat</button>
+        </div>
     </div>
 </div>
 
@@ -408,6 +473,161 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         localStorage.removeItem(storageKey);
         releaseWakeLock();
         resetBtn.classList.remove('visible');
+    });
+
+    // --- Alıntı foto modal (sayaç etkilenmez, fetch ile yükleme) ---
+    const alintiModal = document.getElementById('alintiModal');
+    const alintiFileInput = document.getElementById('alintiFileInput');
+    const alintiPreviewWrap = document.getElementById('alintiPreviewWrap');
+    const alintiPreviewImg = document.getElementById('alintiPreviewImg');
+    const alintiActions = document.getElementById('alintiActions');
+    const alintiCropWrap = document.getElementById('alintiCropWrap');
+    const alintiCropCanvas = document.getElementById('alintiCropCanvas');
+    const alintiCropActions = document.getElementById('alintiCropActions');
+    let alintiCurrentFile = null;
+    let alintiCropRect = null;
+    let alintiLastObjectUrl = null;
+
+    document.getElementById('alintiEkleBtn').addEventListener('click', () => {
+        alintiFileInput.value = '';
+        alintiPreviewWrap.style.display = 'none';
+        alintiActions.style.display = 'none';
+        alintiCropWrap.classList.remove('active');
+        alintiCropActions.style.display = 'none';
+        alintiModal.style.display = 'flex';
+        alintiFileInput.click();
+    });
+
+    document.getElementById('alintiModalCloseBtn').addEventListener('click', () => {
+        alintiModal.style.display = 'none';
+        alintiCurrentFile = null;
+        if (alintiLastObjectUrl) { URL.revokeObjectURL(alintiLastObjectUrl); alintiLastObjectUrl = null; }
+    });
+
+    alintiFileInput.addEventListener('change', function() {
+        const file = this.files && this.files[0];
+        if (!file || !file.type.startsWith('image/')) return;
+        alintiCurrentFile = file;
+        if (alintiLastObjectUrl) URL.revokeObjectURL(alintiLastObjectUrl);
+        alintiLastObjectUrl = URL.createObjectURL(file);
+        alintiPreviewImg.src = alintiLastObjectUrl;
+        alintiPreviewWrap.style.display = 'block';
+        alintiActions.style.display = 'flex';
+    });
+
+    function alintiDoUpload(blobOrFile) {
+        const fd = new FormData();
+        fd.append('action', 'alinti_foto_upload');
+        fd.append('book_id', String(bookId));
+        fd.append('foto', blobOrFile, blobOrFile.name || 'alinti.jpg');
+        fetch('oku.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    alintiModal.style.display = 'none';
+                    alintiCurrentFile = null;
+                    if (alintiLastObjectUrl) { URL.revokeObjectURL(alintiLastObjectUrl); alintiLastObjectUrl = null; }
+                    const prev = statusText.textContent;
+                    statusText.textContent = 'Alıntı eklendi.';
+                    statusText.style.color = '#10b981';
+                    setTimeout(() => { statusText.textContent = prev; statusText.style.color = ''; }, 2500);
+                } else {
+                    alert(data.error || 'Yükleme başarısız.');
+                }
+            })
+            .catch(() => alert('Yükleme başarısız.'));
+    }
+
+    document.getElementById('alintiUploadFullBtn').addEventListener('click', () => {
+        if (!alintiCurrentFile) return;
+        alintiDoUpload(alintiCurrentFile);
+    });
+
+    document.getElementById('alintiCropBtn').addEventListener('click', () => {
+        if (!alintiPreviewImg.src || !alintiPreviewImg.complete) return;
+        alintiCropWrap.classList.add('active');
+        alintiCropActions.style.display = 'flex';
+        alintiActions.style.display = 'none';
+        const img = alintiPreviewImg;
+        const maxW = 360, maxH = 320;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > maxW || h > maxH) {
+            const r = Math.min(maxW/w, maxH/h);
+            w = Math.round(w*r); h = Math.round(h*r);
+        }
+        alintiCropCanvas.width = w; alintiCropCanvas.height = h;
+        const ctx = alintiCropCanvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        alintiCropRect = { x: 0, y: 0, w: w, h: h };
+        let dragging = false, startX, startY;
+        function drawRect(r) {
+            ctx.drawImage(img, 0, 0, w, h);
+            if (r && r.w > 0 && r.h > 0) {
+                ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 2;
+                ctx.strokeRect(r.x, r.y, r.w, r.h);
+                ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                ctx.fillRect(0,0,w,h);
+                ctx.clearRect(r.x,r.y,r.w,r.h);
+                ctx.strokeRect(r.x,r.y,r.w,r.h);
+            }
+        }
+        function getCoords(e) {
+            const rect = alintiCropCanvas.getBoundingClientRect();
+            const scaleX = alintiCropCanvas.width / rect.width, scaleY = alintiCropCanvas.height / rect.height;
+            const ev = e.touches ? e.touches[0] : e;
+            return { x: (ev.clientX - rect.left) * scaleX, y: (ev.clientY - rect.top) * scaleY };
+        }
+        alintiCropCanvas.onmousedown = alintiCropCanvas.ontouchstart = function(e) {
+            e.preventDefault();
+            const p = getCoords(e);
+            dragging = true; startX = p.x; startY = p.y;
+            alintiCropRect = { x: p.x, y: p.y, w: 0, h: 0 };
+            drawRect(alintiCropRect);
+        };
+        alintiCropCanvas.onmousemove = alintiCropCanvas.ontouchmove = function(e) {
+            if (!dragging) return;
+            e.preventDefault();
+            const p = getCoords(e);
+            alintiCropRect.x = Math.min(startX, p.x);
+            alintiCropRect.y = Math.min(startY, p.y);
+            alintiCropRect.w = Math.abs(p.x - startX);
+            alintiCropRect.h = Math.abs(p.y - startY);
+            drawRect(alintiCropRect);
+        };
+        alintiCropCanvas.onmouseup = alintiCropCanvas.onmouseleave = alintiCropCanvas.ontouchend = function(e) {
+            if (!dragging) return;
+            e.preventDefault();
+            dragging = false;
+        };
+    });
+
+    document.getElementById('alintiCropCancelBtn').addEventListener('click', () => {
+        alintiCropWrap.classList.remove('active');
+        alintiCropActions.style.display = 'none';
+        alintiActions.style.display = 'flex';
+    });
+
+    document.getElementById('alintiUploadCropBtn').addEventListener('click', () => {
+        if (!alintiCropRect || alintiCropRect.w < 5 || alintiCropRect.h < 5) {
+            alert('Lütfen kırpmak için bir alan seçin.');
+            return;
+        }
+        const img = alintiPreviewImg;
+        const scaleX = img.naturalWidth / alintiCropCanvas.width;
+        const scaleY = img.naturalHeight / alintiCropCanvas.height;
+        const sx = Math.round(alintiCropRect.x * scaleX);
+        const sy = Math.round(alintiCropRect.y * scaleY);
+        const sw = Math.round(alintiCropRect.w * scaleX);
+        const sh = Math.round(alintiCropRect.h * scaleY);
+        const out = document.createElement('canvas');
+        out.width = sw; out.height = sh;
+        out.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+        out.toBlob(function(blob) {
+            if (blob) {
+                blob.name = alintiCurrentFile && alintiCurrentFile.name ? alintiCurrentFile.name : 'alinti.jpg';
+                alintiDoUpload(blob);
+            }
+        }, 'image/jpeg', 0.92);
     });
 
     function confirmExit() {

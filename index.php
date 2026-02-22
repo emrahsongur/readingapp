@@ -301,6 +301,7 @@ function sure_format_ssddss($saniye) {
         <a href="okumalar.php">Okumalar</a>
         <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
         <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
+        <a href="ayarlar.php">Ayarlar</a>
         <a href="?logout=1" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
     </div>
 </nav>

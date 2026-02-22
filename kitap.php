@@ -273,7 +273,22 @@ if ($kitap_id > 0) {
         $sy = (int)($y['sayfa_baslangic'] ?? 0) ?: (int)($y['sayfa_bitis'] ?? 0);
         return $sx - $sy;
     });
-    usort($alintilar, function ($a, $b) {
+    // İşlenmemiş alıntılar: foto var ve metin placeholder/boş (mobilden yüklenip henüz Gemini ile doldurulmamış)
+    $alinti_placeholder = '[Fotoğraf – metin sonra eklenecek]';
+    $alintilar_islenmemis = [];
+    $alintilar_islenmis = [];
+    foreach ($alintilar as $a) {
+        $alinti_metin = trim($a['alinti'] ?? '');
+        $foto_var = !empty($a['foto']);
+        $islenmemis = $foto_var && ($alinti_metin === '' || $alinti_metin === $alinti_placeholder);
+        if ($islenmemis) {
+            $alintilar_islenmemis[] = $a;
+        } else {
+            $alintilar_islenmis[] = $a;
+        }
+    }
+    usort($alintilar_islenmemis, function ($a, $b) { return strcmp($a['kayit'], $b['kayit']); });
+    usort($alintilar_islenmis, function ($a, $b) {
         $sa = (int)($a['sayfa_baslangic'] ?? 0) ?: (int)($a['sayfa_bitis'] ?? 0) ?: 999999;
         $sb = (int)($b['sayfa_baslangic'] ?? 0) ?: (int)($b['sayfa_bitis'] ?? 0) ?: 999999;
         return $sa - $sb;
@@ -281,13 +296,17 @@ if ($kitap_id > 0) {
     foreach ($dusunceler_by_alinti as $aid => $list) {
         usort($dusunceler_by_alinti[$aid], function ($x, $y) { return strcmp($x['kayit'], $y['kayit']); });
     }
+    // Önce işlenmemiş alıntılar (tepede), sonra sayfasız/sayfalı düşünceler, en sonda işlenmiş alıntılar (sayfa sırasına göre)
+    foreach ($alintilar_islenmemis as $a) {
+        $akis[] = ['tip' => 'alinti', 'kayit' => strtotime($a['kayit']), 'veri' => $a];
+    }
     foreach ($standalone_sayfasiz as $d) {
         $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
     }
     foreach ($standalone_sayfali as $d) {
         $akis[] = ['tip' => 'dusunce', 'kayit' => strtotime($d['kayit']), 'veri' => $d];
     }
-    foreach ($alintilar as $a) {
+    foreach ($alintilar_islenmis as $a) {
         $akis[] = ['tip' => 'alinti', 'kayit' => strtotime($a['kayit']), 'veri' => $a];
     }
 
@@ -445,6 +464,15 @@ function kitap_richtext_html($html) {
         .btn-link-danger { color: #dc2626; }
         .modal { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
         .modal-content { background: #fff; padding: 1.5rem; border-radius: 8px; max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto; position: relative; }
+        #modal-alinti .modal-content { width: 60%; min-width: 60%; max-width: 1200px; }
+        .modal-alinti-wrap { display: flex; gap: 1.5rem; align-items: flex-start; }
+        .modal-alinti-photo-col { flex-shrink: 0; width: 320px; max-width: 40%; }
+        .modal-alinti-photo-col.hidden { display: none; }
+        .modal-alinti-photo-col img { width: 100%; height: auto; border-radius: 8px; border: 1px solid #e5e7eb; display: block; }
+        .modal-alinti-gemini-btn { margin-top: 0.5rem; width: 100%; padding: 0.6rem 0.75rem; font-size: 0.9rem; background: #6366f1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .modal-alinti-gemini-btn:hover { background: #4f46e5; }
+        .modal-alinti-gemini-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .modal-alinti-form-col { flex: 1; min-width: 280px; }
         .modal-close { position: absolute; right: 1rem; top: 0.5rem; font-size: 1.5rem; cursor: pointer; color: #6b7280; }
         .modal-close:hover { color: #111; }
         .modal-dusunce-content { max-width: 560px; }
@@ -560,6 +588,7 @@ function kitap_richtext_html($html) {
         <a href="okumalar.php">Okumalar</a>
         <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
         <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
+        <a href="ayarlar.php">Ayarlar</a>
         <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
     </div>
 </nav>
@@ -844,6 +873,12 @@ function kitap_richtext_html($html) {
 <div id="modal-alinti" class="modal" style="display:none;">
     <div class="modal-content">
         <span class="modal-close" onclick="closeModal('modal-alinti')">&times;</span>
+        <div class="modal-alinti-wrap">
+            <div class="modal-alinti-photo-col hidden" id="modal-alinti-photo-col">
+                <img id="modal-alinti-photo-img" src="" alt="">
+                <button type="button" class="modal-alinti-gemini-btn" id="modal-alinti-gemini-btn">Gemini ile metne çevir</button>
+            </div>
+            <div class="modal-alinti-form-col">
         <h3 id="modal-alinti-title">Alıntı Ekle</h3>
         <form method="post" action="kitap.php" enctype="multipart/form-data" id="form-alinti" onsubmit="return syncRichToHidden('modal-alinti-editor','modal-alinti-hidden');">
             <input type="hidden" name="action" value="alinti_ekle">
@@ -883,6 +918,8 @@ function kitap_richtext_html($html) {
             <button type="submit" class="btn btn-primary">Kaydet</button>
             <button type="button" class="btn btn-cancel" onclick="closeModal('modal-alinti')">İptal</button>
         </form>
+            </div>
+        </div>
     </div>
 </div>
 <!-- Modal: Düşünce Ekle (alıntıya bağlı veya kitaba özel) -->
@@ -1083,6 +1120,7 @@ function openAlintiModal() {
     document.getElementById('modal-alinti-sbit').value = '';
     document.getElementById('modal-alinti-foto-preview').innerHTML = '';
     document.getElementById('form-alinti').querySelector('input[name="foto"]').value = '';
+    document.getElementById('modal-alinti-photo-col').classList.add('hidden');
     openModal('modal-alinti');
 }
 function openAlintiEditModal(el) {
@@ -1098,8 +1136,44 @@ function openAlintiEditModal(el) {
     if (a.foto) {
         preview.innerHTML = '<img src="alintilar/uploads/' + (a.foto || '') + '" alt="" style="max-width:120px; margin-top:8px;">';
     } else { preview.innerHTML = ''; }
+    var photoCol = document.getElementById('modal-alinti-photo-col');
+    if (a.foto) {
+        photoCol.classList.remove('hidden');
+        document.getElementById('modal-alinti-photo-img').src = 'alintilar/uploads/' + a.foto;
+    } else {
+        photoCol.classList.add('hidden');
+    }
     openModal('modal-alinti');
 }
+document.getElementById('modal-alinti-gemini-btn').addEventListener('click', function() {
+    var alintiId = document.getElementById('alinti_id_edit').value;
+    if (!alintiId) return;
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'İşleniyor...';
+    fetch('gemini_ocr.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alinti_id: parseInt(alintiId, 10) })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        btn.disabled = false;
+        btn.textContent = 'Gemini ile metne çevir';
+        if (data.error && !data.text) {
+            alert(data.error);
+            return;
+        }
+        var text = (data.text || '').trim();
+        var editor = document.getElementById('modal-alinti-editor');
+        editor.innerHTML = text.replace(/\n/g, '<br>');
+        if (data.sayfa != null) {
+            document.getElementById('modal-alinti-sb').value = data.sayfa;
+        }
+    }).catch(function() {
+        btn.disabled = false;
+        btn.textContent = 'Gemini ile metne çevir';
+        alert('İstek başarısız.');
+    });
+});
 function openDusunceModal(alintiId, btn) {
     var alintiData = btn && btn.getAttribute('data-alinti') ? JSON.parse(btn.getAttribute('data-alinti')) : null;
     document.getElementById('modal-dusunce-title').textContent = alintiId ? 'Alıntıya düşünce ekle' : 'Düşünce Ekle';

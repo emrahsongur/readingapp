@@ -70,12 +70,15 @@ function alinti_ekle(PDO $pdo, $user_id, $kitap_id, $alinti, $sayfa_baslangic, $
         return 'Kitap bulunamadı veya yetkiniz yok.';
     }
     $alinti = trim($alinti);
-    if ($alinti === '') {
-        return 'Alıntı metni zorunludur.';
-    }
     $foto_adi = null;
     if (!empty($foto_file['tmp_name']) && $foto_file['error'] === UPLOAD_ERR_OK) {
         $foto_adi = alinti_foto_yukle($foto_file);
+    }
+    if ($alinti === '' && empty($foto_adi)) {
+        return 'Alıntı metni veya fotoğraf zorunludur.';
+    }
+    if ($alinti === '' && !empty($foto_adi)) {
+        $alinti = '[Fotoğraf – metin sonra eklenecek]';
     }
     $stmt = $pdo->prepare("INSERT INTO alintilar (kitap_id, alinti, sayfa_baslangic, sayfa_bitis, foto) VALUES (:kitap_id, :alinti, :sayfa_baslangic, :sayfa_bitis, :foto)");
     $stmt->execute([

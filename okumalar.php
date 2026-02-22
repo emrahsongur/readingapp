@@ -281,6 +281,7 @@ function sure_format_ddss($saniye) {
         <span class="nav-current">Okumalar</span>
         <a href="kitap.php" class="nav-btn-primary">+ Kitap Ekle</a>
         <a href="raf.php" class="nav-btn-secondary">+ Raf Ekle</a>
+        <a href="ayarlar.php">Ayarlar</a>
         <a href="logout.php" class="btn-logout" title="<?= htmlspecialchars($_SESSION['ad_soyad']) ?>">Çıkış Yap</a>
     </div>
 </nav>
