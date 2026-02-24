@@ -16,7 +16,32 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 
-// 1b. ALINTI FOTO YÜKLEME (POST, JSON yanıt – sayfa yenilenmez, sayaç durmaz)
+// 1b. DÜŞÜNCE KAYDETME (POST, JSON yanıt – kitaba özel düşünce)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'dusunce_kaydet') {
+    header('Content-Type: application/json; charset=utf-8');
+    $dusunce_book_id = isset($_POST['book_id']) ? (int)$_POST['book_id'] : 0;
+    if ($dusunce_book_id < 1) {
+        echo json_encode(['ok' => false, 'error' => 'Geçersiz kitap.']);
+        exit;
+    }
+    require_once __DIR__ . '/alintilar/bootstrap.php';
+    if (!kitap_kullaniciya_ait($pdo, $dusunce_book_id, $user_id)) {
+        echo json_encode(['ok' => false, 'error' => 'Kitap bulunamadı veya yetkiniz yok.']);
+        exit;
+    }
+    $dusunce_metin = isset($_POST['dusunce']) ? trim((string)$_POST['dusunce']) : '';
+    $sayfa_bas = isset($_POST['sayfa_baslangic']) && $_POST['sayfa_baslangic'] !== '' ? (int)$_POST['sayfa_baslangic'] : null;
+    $sayfa_bit = isset($_POST['sayfa_bitis']) && $_POST['sayfa_bitis'] !== '' ? (int)$_POST['sayfa_bitis'] : null;
+    $err = dusunce_ekle($pdo, $user_id, $dusunce_book_id, $dusunce_metin, $sayfa_bas, $sayfa_bit, null);
+    if ($err !== null) {
+        echo json_encode(['ok' => false, 'error' => $err]);
+        exit;
+    }
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
+// 1c. ALINTI FOTO YÜKLEME (POST, JSON yanıt – modal açıkken sayaç durar)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'alinti_foto_upload') {
     header('Content-Type: application/json; charset=utf-8');
     $upload_book_id = isset($_POST['book_id']) ? (int)$_POST['book_id'] : 0;
@@ -202,6 +227,25 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         #alintiModal .alinti-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
         #alintiModal .alinti-actions button { flex: 1; min-width: 120px; padding: 0.6rem; font-size: 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; }
         #alintiModal .alinti-file-input { display: none; }
+        .btn-dusunce { background-color: #059669; margin-top: 0.5rem; flex: none; width: 100%; }
+        .btn-dusunce:hover { background-color: #047857; }
+        #dusunceModal .modal { max-width: 420px; position: relative; }
+        #dusunceModal .modal-header-wrap { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+        #dusunceModal .modal-close-x { min-width: 44px; min-height: 44px; padding: 0; border: none; background: #e5e7eb; color: #374151; font-size: 1.5rem; line-height: 1; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
+        #dusunceModal .modal-close-x:hover { background: #d1d5db; }
+        #dusunceModal .form-group textarea { width: 100%; padding: 1rem; border: 2px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; min-height: 80px; resize: vertical; font-family: inherit; }
+        #dusunceModal .dusunce-voice-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+        #dusunceModal .btn-mic { min-width: 44px; min-height: 44px; padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; background: #6b7280; color: white; }
+        #dusunceModal .btn-mic.recording { background: #dc2626; }
+        #dusunceModal .btn-mic.stopped { background: #059669; }
+        #dusunceModal .btn-gemini-duzelt { padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; background: #6366f1; color: white; }
+        #dusunceModal .btn-gemini-duzelt:hover { background: #4f46e5; }
+        #dusunceModal .btn-gemini-duzelt:disabled { opacity: 0.6; cursor: not-allowed; }
+        #dusunceModal .dusunce-rich-toolbar { display: flex; gap: 2px; padding: 4px 0; flex-wrap: wrap; }
+        #dusunceModal .dusunce-rich-toolbar button { padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #f9fafb; cursor: pointer; font-size: 0.85rem; }
+        #dusunceModal .dusunce-rich-toolbar button:hover { background: #e5e7eb; }
+        #dusunceModal .dusunce-editor { min-height: 120px; padding: 0.75rem; border: 2px solid #d1d5db; border-radius: 8px; background: #fff; font-family: inherit; font-size: 1rem; overflow-y: auto; }
+        #dusunceModal .dusunce-editor:focus { outline: none; border-color: #2563eb; }
     </style>
 </head>
 <body<?= !empty($kitap['kapak']) ? ' class="has-cover"' : '' ?>>
@@ -236,6 +280,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     
     <div style="width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box;">
         <button type="button" class="btn btn-alinti" id="alintiEkleBtn">📷 Alıntı Ekle</button>
+        <button type="button" class="btn btn-dusunce" id="dusunceEkleBtn">💭 Düşünce Ekle</button>
         <button type="button" class="btn btn-reset" id="resetBtn">Yeni seans başlat</button>
         <a href="index.php" class="btn-cancel" onclick="return confirmExit();">Vazgeç ve Çık</a>
         <button type="button" class="btn btn-ana-sayfa" id="anaSayfaBtn">Ana Sayfa</button>
@@ -264,6 +309,46 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         </div>
         <div class="modal-buttons" style="margin-top:1rem;">
             <button type="button" class="btn-close" id="alintiModalCloseBtn">Kapat</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="dusunceModal" style="display:none;">
+    <div class="modal">
+        <div class="modal-header-wrap">
+            <h3>Düşünce Ekle</h3>
+            <button type="button" class="modal-close-x" id="dusunceModalCloseX" aria-label="Kapat">×</button>
+        </div>
+        <div class="form-group">
+            <label>Sesle kaydet</label>
+            <div class="dusunce-voice-row">
+                <button type="button" class="btn-mic" id="dusunceMicBtn">🎤 Mikrofon</button>
+                <button type="button" class="btn-gemini-duzelt" id="dusunceGeminiDuzeltBtn">Gemini ile düzelt</button>
+            </div>
+            <textarea id="dusunceTranscribeArea" placeholder="Ses kaydı metni buraya yazılacak veya elle yazıp düzeltebilirsiniz..."></textarea>
+        </div>
+        <div class="form-group">
+            <label for="dusunceEditor">Düşünceniz</label>
+            <div class="dusunce-rich-toolbar" id="dusunceToolbar">
+                <button type="button" onclick="dusunceRichCmd('bold')" title="Kalın">B</button>
+                <button type="button" onclick="dusunceRichCmd('italic')" title="İtalik">İ</button>
+                <button type="button" onclick="dusunceRichCmd('underline')" title="Altı çizili">U</button>
+                <button type="button" onclick="dusunceRichCmd('hiliteColor', false, '#fef08a')" title="Vurgula">Vurgula</button>
+            </div>
+            <div id="dusunceEditor" class="dusunce-editor" contenteditable="true"></div>
+            <input type="hidden" id="dusunceHidden" value="">
+        </div>
+        <div class="form-group">
+            <label for="dusunceSayfaBaslangic">Başlangıç sayfası (opsiyonel)</label>
+            <input type="number" id="dusunceSayfaBaslangic" min="1" placeholder="">
+        </div>
+        <div class="form-group">
+            <label for="dusunceSayfaBitis">Bitiş sayfası (opsiyonel)</label>
+            <input type="number" id="dusunceSayfaBitis" min="1" placeholder="">
+        </div>
+        <div class="modal-buttons">
+            <button type="button" class="btn-close" id="dusunceModalCloseBtn">Kapat</button>
+            <button type="button" class="btn-save" id="dusunceKaydetBtn">Düşünceyi kaydet</button>
         </div>
     </div>
 </div>
@@ -319,6 +404,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     let timerInterval = null;
     let isRunning = false;
     let wakeLock = null;
+    let timerPausedByModal = false;
 
     function getCurrentSeconds() {
         if (!isRunning || startTime === null) return pausedAccumulatedSeconds;
@@ -478,7 +564,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         resetBtn.classList.remove('visible');
     });
 
-    // --- Alıntı foto modal (sayaç etkilenmez, fetch ile yükleme) ---
+    // --- Alıntı foto modal (açıkken sayaç durar, kapanınca devam eder) ---
     const alintiModal = document.getElementById('alintiModal');
     const alintiFileInput = document.getElementById('alintiFileInput');
     const alintiPreviewWrap = document.getElementById('alintiPreviewWrap');
@@ -491,7 +577,15 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     let alintiCropRect = null;
     let alintiLastObjectUrl = null;
 
+    function closeAlintiModalAndResume() {
+        alintiModal.style.display = 'none';
+        alintiCurrentFile = null;
+        if (alintiLastObjectUrl) { URL.revokeObjectURL(alintiLastObjectUrl); alintiLastObjectUrl = null; }
+        if (timerPausedByModal) { startTimer(); timerPausedByModal = false; }
+    }
+
     document.getElementById('alintiEkleBtn').addEventListener('click', () => {
+        if (isRunning) { pauseTimer(); timerPausedByModal = true; }
         alintiFileInput.value = '';
         alintiPreviewWrap.style.display = 'none';
         alintiActions.style.display = 'none';
@@ -501,11 +595,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         alintiFileInput.click();
     });
 
-    document.getElementById('alintiModalCloseBtn').addEventListener('click', () => {
-        alintiModal.style.display = 'none';
-        alintiCurrentFile = null;
-        if (alintiLastObjectUrl) { URL.revokeObjectURL(alintiLastObjectUrl); alintiLastObjectUrl = null; }
-    });
+    document.getElementById('alintiModalCloseBtn').addEventListener('click', closeAlintiModalAndResume);
 
     alintiFileInput.addEventListener('change', function() {
         const file = this.files && this.files[0];
@@ -527,9 +617,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
             .then(r => r.json())
             .then(data => {
                 if (data.ok) {
-                    alintiModal.style.display = 'none';
-                    alintiCurrentFile = null;
-                    if (alintiLastObjectUrl) { URL.revokeObjectURL(alintiLastObjectUrl); alintiLastObjectUrl = null; }
+                    closeAlintiModalAndResume();
                     const prev = statusText.textContent;
                     statusText.textContent = 'Alıntı eklendi.';
                     statusText.style.color = '#10b981';
@@ -631,6 +719,178 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
                 alintiDoUpload(blob);
             }
         }, 'image/jpeg', 0.92);
+    });
+
+    // --- Düşünce modal (açıkken sayaç durar, kapanınca devam eder) ---
+    const dusunceModal = document.getElementById('dusunceModal');
+    const dusunceEditor = document.getElementById('dusunceEditor');
+    const dusunceHidden = document.getElementById('dusunceHidden');
+    const dusunceTranscribeArea = document.getElementById('dusunceTranscribeArea');
+    const dusunceSayfaBaslangic = document.getElementById('dusunceSayfaBaslangic');
+    const dusunceSayfaBitis = document.getElementById('dusunceSayfaBitis');
+
+    function dusunceRichCmd(cmd, ui, value) {
+        dusunceEditor.focus();
+        document.execCommand(cmd, ui || false, value || null);
+    }
+
+    function syncDusunceRichToHidden() {
+        const html = dusunceEditor.innerHTML.trim();
+        dusunceHidden.value = (html === '' || html === '<br>') ? '' : html;
+    }
+
+    function closeDusunceModalAndResume() {
+        dusunceModal.style.display = 'none';
+        dusunceEditor.innerHTML = '';
+        dusunceHidden.value = '';
+        dusunceTranscribeArea.value = '';
+        dusunceSayfaBaslangic.value = '';
+        dusunceSayfaBitis.value = '';
+        dusunceMicBtn.classList.remove('recording', 'stopped');
+        dusunceMicBtn.textContent = '🎤 Mikrofon';
+        if (timerPausedByModal) { startTimer(); timerPausedByModal = false; }
+    }
+
+    const dusunceMicBtn = document.getElementById('dusunceMicBtn');
+    let dusunceMediaRecorder = null;
+    let dusunceAudioChunks = [];
+
+    dusunceMicBtn.addEventListener('click', () => {
+        if (dusunceMediaRecorder && dusunceMediaRecorder.state === 'recording') {
+            dusunceMediaRecorder.stop();
+            dusunceMicBtn.classList.remove('recording');
+            dusunceMicBtn.classList.add('stopped');
+            dusunceMicBtn.textContent = '✓ Durduruldu';
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            alert('Bu tarayıcı mikrofon kaydını desteklemiyor.');
+            return;
+        }
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm' : 'audio/ogg';
+            dusunceMediaRecorder = new MediaRecorder(stream);
+            dusunceAudioChunks = [];
+            dusunceMediaRecorder.ondataavailable = e => { if (e.data.size > 0) dusunceAudioChunks.push(e.data); };
+            dusunceMediaRecorder.onstop = () => {
+                stream.getTracks().forEach(t => t.stop());
+                if (dusunceAudioChunks.length === 0) return;
+                const blob = new Blob(dusunceAudioChunks, { type: mime });
+                const fd = new FormData();
+                fd.append('action', 'transcribe');
+                fd.append('audio', blob, 'audio.webm');
+                dusunceTranscribeArea.placeholder = 'Dönüştürülüyor...';
+                fetch('gemini_dusunce.php', { method: 'POST', body: fd })
+                    .then(r => r.json())
+                    .then(data => {
+                        dusunceTranscribeArea.placeholder = 'Ses kaydı metni buraya yazılacak...';
+                        if (data.error) {
+                            alert(data.error);
+                            return;
+                        }
+                        const prev = dusunceTranscribeArea.value;
+                        dusunceTranscribeArea.value = prev ? prev + '\n' + (data.text || '') : (data.text || '');
+                    })
+                    .catch(() => {
+                        dusunceTranscribeArea.placeholder = 'Ses kaydı metni buraya yazılacak...';
+                        alert('Ses dönüştürme başarısız.');
+                    });
+            };
+            dusunceMediaRecorder.start();
+            dusunceMicBtn.classList.add('recording');
+            dusunceMicBtn.classList.remove('stopped');
+            dusunceMicBtn.textContent = '⏹ Kaydı Durdur';
+        }).catch(() => alert('Mikrofon erişimi verilmedi.'));
+    });
+
+    document.getElementById('dusunceGeminiDuzeltBtn').addEventListener('click', () => {
+        const ham = dusunceTranscribeArea.value.trim();
+        if (ham === '') {
+            alert('Önce ses kaydı yapıp metne dönüştürün veya yukarıdaki alana metin yazın.');
+            return;
+        }
+        const btn = document.getElementById('dusunceGeminiDuzeltBtn');
+        btn.disabled = true;
+        btn.textContent = 'Düzeltiliyor...';
+        const fd = new FormData();
+        fd.append('action', 'duzelt');
+        fd.append('metin', ham);
+        fetch('gemini_dusunce.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.textContent = 'Gemini ile düzelt';
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                const txt = (data.text || '').trim();
+                if (txt) {
+                    const sel = window.getSelection();
+                    const range = document.createRange();
+                    dusunceEditor.focus();
+                    if (dusunceEditor.childNodes.length) {
+                        range.setStart(dusunceEditor, dusunceEditor.childNodes.length);
+                        range.collapse(true);
+                    } else {
+                        range.setStart(dusunceEditor, 0);
+                        range.collapse(true);
+                    }
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    document.execCommand('insertText', false, txt);
+                }
+            })
+            .catch(() => {
+                btn.disabled = false;
+                btn.textContent = 'Gemini ile düzelt';
+                alert('Düzeltme isteği başarısız.');
+            });
+    });
+
+    document.getElementById('dusunceEkleBtn').addEventListener('click', () => {
+        if (isRunning) { pauseTimer(); timerPausedByModal = true; }
+        dusunceEditor.innerHTML = '';
+        dusunceHidden.value = '';
+        dusunceTranscribeArea.value = '';
+        dusunceSayfaBaslangic.value = '';
+        dusunceSayfaBitis.value = '';
+        dusunceMicBtn.classList.remove('recording', 'stopped');
+        dusunceMicBtn.textContent = '🎤 Mikrofon';
+        dusunceModal.style.display = 'flex';
+        dusunceEditor.focus();
+    });
+
+    document.getElementById('dusunceModalCloseX').addEventListener('click', closeDusunceModalAndResume);
+    document.getElementById('dusunceModalCloseBtn').addEventListener('click', closeDusunceModalAndResume);
+
+    document.getElementById('dusunceKaydetBtn').addEventListener('click', () => {
+        syncDusunceRichToHidden();
+        const metin = dusunceHidden.value.trim();
+        if (metin === '') {
+            alert('Lütfen düşüncenizi yazın.');
+            return;
+        }
+        const fd = new FormData();
+        fd.append('action', 'dusunce_kaydet');
+        fd.append('book_id', String(bookId));
+        fd.append('dusunce', metin);
+        fd.append('sayfa_baslangic', dusunceSayfaBaslangic.value.trim());
+        fd.append('sayfa_bitis', dusunceSayfaBitis.value.trim());
+        fetch('oku.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    closeDusunceModalAndResume();
+                    const prev = statusText.textContent;
+                    statusText.textContent = 'Düşünce kaydedildi.';
+                    statusText.style.color = '#10b981';
+                    setTimeout(() => { statusText.textContent = prev; statusText.style.color = ''; }, 2500);
+                } else {
+                    alert(data.error || 'Kayıt başarısız.');
+                }
+            })
+            .catch(() => alert('Kayıt başarısız.'));
     });
 
     function confirmExit() {
