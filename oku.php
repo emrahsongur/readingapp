@@ -71,6 +71,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // 2. SEANS KAYDETME İŞLEMİ (POST)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'save_session') {
     $book_id = (int)$_POST['book_id'];
+    $stmtTip = $pdo->prepare("SELECT kitap_tipi_id FROM kitaplar WHERE id = ? AND user_id = ?");
+    $stmtTip->execute([$book_id, $user_id]);
+    $tipRow = $stmtTip->fetch(PDO::FETCH_ASSOC);
+    if ($tipRow && (int)($tipRow['kitap_tipi_id'] ?? 1) !== 1) {
+        header("Location: kitap.php?id=" . $book_id);
+        exit;
+    }
     $sure_saniye = (int)$_POST['sure_saniye'];
     $baslama_sayfasi = (int)$_POST['baslama_sayfasi'];
     $bitis_sayfasi = (int)$_POST['bitis_sayfasi'];
@@ -121,6 +128,13 @@ $kitap = $stmtKitap->fetch();
 
 if (!$kitap) {
     die("Kitap bulunamadı veya yetkiniz yok.");
+}
+
+// Bu sayfa sadece basılı kitaplar içindir; E-kitap ve Sesli için eoku.php / dinle.php kullanılır
+$kitap_tipi_id = (int)($kitap['kitap_tipi_id'] ?? 1);
+if ($kitap_tipi_id !== 1) {
+    header("Location: kitap.php?id=" . $book_id);
+    exit;
 }
 
 // Bu kitap için son okuma seansını bul (Başlama sayfasını belirlemek için)

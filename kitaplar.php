@@ -10,18 +10,22 @@ $user_id = $_SESSION['user_id'];
 
 try {
     $stmt = $pdo->prepare("
-        SELECT k.*, d.durum as durum_adi,
+        SELECT k.*, d.durum as durum_adi, kt.ad as kitap_tipi_adi,
                o.ilk_baslama, o.son_sayfa, o.toplam_saniye, o.son_bitis,
+               o.son_yuzde, o.son_sure_saniye,
                COALESCE(al.alinti_sayisi, 0) as alinti_sayisi,
                COALESCE(du.dusunce_sayisi, 0) as dusunce_sayisi
         FROM kitaplar k
         LEFT JOIN durum d ON k.durum_id = d.id
+        LEFT JOIN kitap_tipleri kt ON k.kitap_tipi_id = kt.id
         LEFT JOIN (
             SELECT book_id,
                    MIN(baslama) as ilk_baslama,
                    MAX(bitis_sayfasi) as son_sayfa,
                    SUM(sure_saniye) as toplam_saniye,
-                   MAX(bitis) as son_bitis
+                   MAX(bitis) as son_bitis,
+                   MAX(bitis_yuzde) as son_yuzde,
+                   MAX(bitis_sure_saniye) as son_sure_saniye
             FROM okumalar
             WHERE user_id = :user_id
             GROUP BY book_id
@@ -178,21 +182,31 @@ function sure_format_ssddss($saniye) {
         <div class="book-grid">
             <?php foreach ($kitaplar as $kitap): ?>
                 <?php
+                $tip_id = (int)($kitap['kitap_tipi_id'] ?? 1);
                 $sayfa = (int) $kitap['sayfa'];
                 $baslangic = isset($kitap['baslangic_sayfa']) ? (int)$kitap['baslangic_sayfa'] : 1;
                 $bitis_eff = (isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa'] !== null && $kitap['bitis_sayfa'] !== '') ? (int)$kitap['bitis_sayfa'] : $sayfa;
-                if ($bitis_eff < 1) {
-                    $bitis_eff = $sayfa;
-                }
+                if ($bitis_eff < 1) $bitis_eff = $sayfa;
                 $son_sayfa = (int) ($kitap['son_sayfa'] ?? 0);
                 $toplam_okunabilir = max(0, $bitis_eff - $baslangic + 1);
                 $okunan = max(0, min($son_sayfa - $baslangic + 1, $toplam_okunabilir));
-                $yuzde = $toplam_okunabilir > 0 ? min(100, (int) round(($okunan / $toplam_okunabilir) * 100)) : 0;
+                $yuzde = 0;
+                if ($tip_id === 1) {
+                    $yuzde = $toplam_okunabilir > 0 ? min(100, (int) round(($okunan / $toplam_okunabilir) * 100)) : 0;
+                } elseif ($tip_id === 2) {
+                    $yuzde = min(100, (int) round((float)($kitap['son_yuzde'] ?? 0)));
+                } elseif ($tip_id === 3) {
+                    $st = (int)($kitap['sesli_toplam_saniye'] ?? 0);
+                    $ss = (int)($kitap['son_sure_saniye'] ?? 0);
+                    $yuzde = ($st > 0 && $ss > 0) ? min(100, (int) round($ss / $st * 100)) : 0;
+                }
+                $devam_url = $tip_id === 1 ? 'oku.php' : ($tip_id === 2 ? 'eoku.php' : 'dinle.php');
                 $has_seans = (isset($kitap['toplam_saniye']) && (int)$kitap['toplam_saniye'] > 0) || !empty($kitap['ilk_baslama']) || !empty($kitap['son_bitis']);
+                $tip_adi = $kitap['kitap_tipi_adi'] ?? ($tip_id === 1 ? 'Basılı' : ($tip_id === 2 ? 'Elektronik' : 'Sesli'));
                 ?>
                 <div class="book-card">
                     <div class="cover-wrap">
-                        <a href="oku.php?id=<?= (int) $kitap['id'] ?>" class="cover-link" aria-label="Okumaya devam et">
+                        <a href="<?= $devam_url ?>?id=<?= (int) $kitap['id'] ?>" class="cover-link" aria-label="<?= $tip_id === 3 ? 'Dinlemeye devam et' : 'Okumaya devam et' ?>">
                             <?php if (!empty($kitap['kapak'])): ?>
                                 <img src="assets/uploads/<?= htmlspecialchars($kitap['kapak']) ?>" class="cover-img" alt="<?= htmlspecialchars($kitap['baslik']) ?>">
                             <?php else: ?>
@@ -208,14 +222,27 @@ function sure_format_ssddss($saniye) {
                     <div class="book-author"><?= htmlspecialchars($kitap['yazar']) ?></div>
                     <div class="book-meta">
                         <span class="durum-badge"><?= htmlspecialchars($kitap['durum_adi'] ?? 'Belirtilmedi') ?></span>
-                        <div><?= $sayfa ?> sayfa</div>
-                        <?php if ((int)$kitap['durum_id'] === 2 && $bitis_eff > 0): ?>
-                            <div><?= $son_sayfa ?>/<?= $bitis_eff ?></div>
+                        <span class="durum-badge" style="margin-left:4px;"><?= htmlspecialchars($tip_adi) ?></span>
+                        <?php if ($tip_id === 1): ?>
+                            <div><?= $sayfa ?> sayfa</div>
+                            <?php if ((int)$kitap['durum_id'] === 2 && $bitis_eff > 0): ?>
+                                <div><?= $son_sayfa ?>/<?= $bitis_eff ?></div>
+                            <?php endif; ?>
+                        <?php elseif ($tip_id === 3): ?>
+                            <?php $st = (int)($kitap['sesli_toplam_saniye'] ?? 0); if ($st > 0): ?>
+                                <div>Toplam: <?= sure_format_ssddss($st) ?></div>
+                            <?php endif; ?>
                         <?php endif; ?>
                         <?php if ((int)$kitap['durum_id'] === 2): ?>
-                            <div class="progress-bar-wrap" title="<?= $yuzde ?>% okundu">
+                            <div class="progress-bar-wrap" title="<?= $yuzde ?>%">
                                 <div class="progress-bar-fill" style="width: <?= $yuzde ?>%;"></div>
                             </div>
+                            <?php if ($tip_id === 2): ?>
+                                <div><?= $yuzde ?>%</div>
+                            <?php elseif ($tip_id === 3): ?>
+                                <?php $ss = (int)($kitap['son_sure_saniye'] ?? 0); $st = (int)($kitap['sesli_toplam_saniye'] ?? 0); ?>
+                                <div><?= $st > 0 && $ss > 0 ? sure_format_ssddss($ss) . ' / ' . sure_format_ssddss($st) : '' ?></div>
+                            <?php endif; ?>
                         <?php endif; ?>
                         <?php if ($has_seans): ?>
                             <?php if (isset($kitap['toplam_saniye']) && (int)$kitap['toplam_saniye'] > 0): ?>

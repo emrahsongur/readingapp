@@ -11,7 +11,12 @@ $user_id = $_SESSION['user_id'];
 // Tarih filtresi: varsayılan son 7 gün (7 gün öncesi + bugün dahil = 8 takvim günü, tüm seanslar görünsün)
 $baslangic = isset($_GET['baslangic']) ? $_GET['baslangic'] : date('Y-m-d', strtotime('-7 days'));
 $bitis = isset($_GET['bitis']) ? $_GET['bitis'] : date('Y-m-d');
-// Kitap filtresi (isteğe bağlı)
+// Kitap tipi: 1=Basılı, 2=E-kitap, 3=Sesli
+$tip = isset($_GET['tip']) ? (int)$_GET['tip'] : 1;
+if (!in_array($tip, [1, 2, 3], true)) {
+    $tip = 1;
+}
+// Kitap filtresi (isteğe bağlı, seçilen tipe göre)
 $kitap_id = isset($_GET['kitap_id']) ? (int) $_GET['kitap_id'] : 0;
 // Sayfalama: sayfa başına 25, 50 veya 100 seans
 $per_page = isset($_GET['per_page']) ? (int) $_GET['per_page'] : 25;
@@ -22,11 +27,14 @@ $sayfa = isset($_GET['sayfa']) ? max(1, (int) $_GET['sayfa']) : 1;
 $offset = ($sayfa - 1) * $per_page;
 
 try {
-    // Filtrelenen aralıkta en az bir seansı olan kitaplar (kitap dropdown için)
+    $where_tip = ' AND k.kitap_tipi_id = :tip';
+    $params_extra = ['tip' => $tip];
+
+    // Filtrelenen aralıkta en az bir seansı olan kitaplar (sadece seçilen tipte)
     $stmtKitaplar = $pdo->prepare("
         SELECT DISTINCT k.id, k.baslik
         FROM okumalar o
-        JOIN kitaplar k ON o.book_id = k.id AND k.user_id = :user_id
+        JOIN kitaplar k ON o.book_id = k.id AND k.user_id = :user_id " . $where_tip . "
         WHERE o.user_id = :user_id2
           AND DATE(o.baslama) >= :baslangic
           AND DATE(o.baslama) <= :bitis
@@ -36,19 +44,21 @@ try {
         'user_id' => $user_id,
         'user_id2' => $user_id,
         'baslangic' => $baslangic,
-        'bitis' => $bitis
+        'bitis' => $bitis,
+        'tip' => $tip
     ]);
     $filtre_kitaplari = $stmtKitaplar->fetchAll(PDO::FETCH_ASSOC);
 
     // Toplam seans sayısı (sayfalama için)
     $where_kitap = $kitap_id > 0 ? ' AND o.book_id = :book_id' : '';
-    $params_count = ['user_id' => $user_id, 'baslangic' => $baslangic, 'bitis' => $bitis];
+    $params_count = ['user_id' => $user_id, 'baslangic' => $baslangic, 'bitis' => $bitis, 'tip' => $tip];
     if ($kitap_id > 0) {
         $params_count['book_id'] = $kitap_id;
     }
     $stmtCount = $pdo->prepare("
         SELECT COUNT(*) as total
         FROM okumalar o
+        JOIN kitaplar k ON o.book_id = k.id AND k.user_id = :user_id " . $where_tip . "
         WHERE o.user_id = :user_id
           AND DATE(o.baslama) >= :baslangic
           AND DATE(o.baslama) <= :bitis
@@ -62,17 +72,16 @@ try {
         $offset = ($sayfa - 1) * $per_page;
     }
 
-    // Sayfalı seans listesi
-    $params = ['user_id' => $user_id, 'baslangic' => $baslangic, 'bitis' => $bitis, 'limit' => $per_page, 'offset' => $offset];
-    if ($kitap_id > 0) {
-        $params['book_id'] = $kitap_id;
-    }
+    // Sayfalı seans listesi (kitap_tipi_id ile JOIN)
     $stmt = $pdo->prepare("
         SELECT o.id, o.book_id, o.baslama, o.bitis, o.sure_saniye, o.baslama_sayfasi, o.bitis_sayfasi,
-               k.baslik as kitap_baslik, k.kapak
+               o.baslama_yuzde, o.bitis_yuzde, o.baslama_sure_saniye, o.bitis_sure_saniye,
+               k.baslik as kitap_baslik, k.kapak, k.kitap_tipi_id, k.sesli_toplam_saniye
         FROM okumalar o
-        LEFT JOIN kitaplar k ON o.book_id = k.id
+        LEFT JOIN kitaplar k ON o.book_id = k.id AND k.user_id = :user_id
         WHERE o.user_id = :user_id
+          AND k.id IS NOT NULL
+          AND k.kitap_tipi_id = :tip
           AND DATE(o.baslama) >= :baslangic
           AND DATE(o.baslama) <= :bitis
           " . ($kitap_id > 0 ? ' AND o.book_id = :book_id' : '') . "
@@ -80,6 +89,7 @@ try {
         LIMIT :limit OFFSET :offset
     ");
     $stmt->bindValue(':user_id', $user_id, PDO::PARAM_INT);
+    $stmt->bindValue(':tip', $tip, PDO::PARAM_INT);
     $stmt->bindValue(':baslangic', $baslangic, PDO::PARAM_STR);
     $stmt->bindValue(':bitis', $bitis, PDO::PARAM_STR);
     if ($kitap_id > 0) {
@@ -90,12 +100,13 @@ try {
     $stmt->execute();
     $okumalar = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Filtrelenen tüm seanslar için toplam/ortalama (sayfalama dışı)
+    // Filtrelenen tüm seanslar için toplam (tip bazlı)
     $stmtToplam = $pdo->prepare("
         SELECT COUNT(*) as adet,
                COALESCE(SUM(o.sure_saniye), 0) as toplam_saniye,
-               COALESCE(SUM(GREATEST(0, COALESCE(o.bitis_sayfasi, o.baslama_sayfasi) - o.baslama_sayfasi + 1)), 0) as toplam_sayfa
+               COALESCE(SUM(GREATEST(0, COALESCE(o.bitis_sayfasi, o.baslama_sayfasi) - COALESCE(o.baslama_sayfasi, 0) + 1)), 0) as toplam_sayfa
         FROM okumalar o
+        JOIN kitaplar k ON o.book_id = k.id AND k.user_id = :user_id AND k.kitap_tipi_id = :tip
         WHERE o.user_id = :user_id
           AND DATE(o.baslama) >= :baslangic
           AND DATE(o.baslama) <= :bitis
@@ -107,19 +118,19 @@ try {
     die("Veritabanı hatası: " . $e->getMessage());
 }
 
-// Günlük gruplama: toplam saniye ve toplam sayfa
+// Günlük gruplama: toplam saniye, toplam sayfa (Basılı), sesli için dinlenen süre
 $gunlere_gore = [];
 foreach ($okumalar as $o) {
     $gun = date('Y-m-d', strtotime($o['baslama']));
     if (!isset($gunlere_gore[$gun])) {
         $gunlere_gore[$gun] = ['toplam_saniye' => 0, 'toplam_sayfa' => 0, 'seanslar' => []];
     }
-    $gunlere_gore[$gun]['toplam_saniye'] += (int) $o['sure_saniye'];
-    $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
-    if ($sayfa_adedi < 1) {
-        $sayfa_adedi = 0;
+    $gunlere_gore[$gun]['toplam_saniye'] += (int) ($o['sure_saniye'] ?? 0);
+    if ($tip === 1) {
+        $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)($o['baslama_sayfasi'] ?? 0) + 1;
+        if ($sayfa_adedi < 1) $sayfa_adedi = 0;
+        $gunlere_gore[$gun]['toplam_sayfa'] += $sayfa_adedi;
     }
-    $gunlere_gore[$gun]['toplam_sayfa'] += $sayfa_adedi;
     $gunlere_gore[$gun]['seanslar'][] = $o;
 }
 
@@ -227,7 +238,14 @@ function sure_format_ddss($saniye) {
 <div class="container">
     <h2 style="margin-top: 0;">Okuma Seansları</h2>
 
+    <ul class="tab-list" style="display:flex; gap:0.5rem; list-style:none; padding:0; margin:0 0 1rem 0; border-bottom:2px solid #e5e7eb;">
+        <li><a href="okumalar.php?<?= http_build_query(array_merge($_GET, ['tip' => 1, 'sayfa' => 1])) ?>" style="padding:0.5rem 1rem; text-decoration:none; color:<?= $tip === 1 ? '#2563eb' : '#6b7280' ?>; font-weight:<?= $tip === 1 ? '700' : '400' ?>; border-bottom:<?= $tip === 1 ? '2px solid #2563eb' : 'none' ?>; margin-bottom: -2px;">Basılı</a></li>
+        <li><a href="okumalar.php?<?= http_build_query(array_merge($_GET, ['tip' => 2, 'sayfa' => 1])) ?>" style="padding:0.5rem 1rem; text-decoration:none; color:<?= $tip === 2 ? '#2563eb' : '#6b7280' ?>; font-weight:<?= $tip === 2 ? '700' : '400' ?>; border-bottom:<?= $tip === 2 ? '2px solid #2563eb' : 'none' ?>; margin-bottom: -2px;">E-kitap</a></li>
+        <li><a href="okumalar.php?<?= http_build_query(array_merge($_GET, ['tip' => 3, 'sayfa' => 1])) ?>" style="padding:0.5rem 1rem; text-decoration:none; color:<?= $tip === 3 ? '#2563eb' : '#6b7280' ?>; font-weight:<?= $tip === 3 ? '700' : '400' ?>; border-bottom:<?= $tip === 3 ? '2px solid #2563eb' : 'none' ?>; margin-bottom: -2px;">Sesli</a></li>
+    </ul>
+
     <form method="get" action="okumalar.php" class="filter-form">
+        <input type="hidden" name="tip" value="<?= (int)$tip ?>">
         <label for="baslangic">Başlangıç:</label>
         <input type="date" id="baslangic" name="baslangic" value="<?= htmlspecialchars($baslangic) ?>">
         <label for="bitis">Bitiş:</label>
@@ -257,9 +275,13 @@ function sure_format_ddss($saniye) {
                 <div class="day-header">
                     <span><?= $gun_etiket ?></span>
                     <span class="day-total">
-                        Toplam: <?= sure_format_ssddss($veri['toplam_saniye']) ?>
-                        <?php if ($gun_toplam_sayfa > 0): ?>
+                        Toplam süre: <?= sure_format_ssddss($veri['toplam_saniye']) ?>
+                        <?php if ($tip === 1 && $gun_toplam_sayfa > 0): ?>
                             | <?= $gun_toplam_sayfa ?> sayfa | Sayfa başı ortalama: <?= $gun_ortalama_ddss ?>
+                        <?php elseif ($tip === 2): ?>
+                            | <?= count($veri['seanslar']) ?> seans
+                        <?php elseif ($tip === 3): ?>
+                            | <?= count($veri['seanslar']) ?> kayıt
                         <?php endif; ?>
                     </span>
                 </div>
@@ -270,21 +292,33 @@ function sure_format_ddss($saniye) {
                                 <th width="50">Kapak</th>
                                 <th>Tarih / Saat</th>
                                 <th>Kitap</th>
-                                <th>Başlama sayfası</th>
-                                <th>Bitiş sayfası</th>
-                                <th>Okunan sayfa</th>
-                                <th>Süre</th>
-                                <th>Sayfa başı</th>
+                                <?php if ($tip === 1): ?>
+                                    <th>Başlama sayfası</th>
+                                    <th>Bitiş sayfası</th>
+                                    <th>Okunan sayfa</th>
+                                    <th>Süre</th>
+                                    <th>Sayfa başı</th>
+                                <?php elseif ($tip === 2): ?>
+                                    <th>Başlangıç %</th>
+                                    <th>Bitiş %</th>
+                                    <th>Süre</th>
+                                <?php else: ?>
+                                    <th>Konum</th>
+                                    <th>Toplam içinde %</th>
+                                <?php endif; ?>
                             </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($veri['seanslar'] as $o):
-                                $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
-                                if ($sayfa_adedi < 1) {
-                                    $sayfa_adedi = 1;
+                                if ($tip === 1) {
+                                    $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)($o['baslama_sayfasi'] ?? 0) + 1;
+                                    if ($sayfa_adedi < 1) $sayfa_adedi = 0;
+                                    $saniye_per_sayfa = $sayfa_adedi > 0 ? (int) round((int)($o['sure_saniye'] ?? 0) / $sayfa_adedi) : 0;
+                                    $sayfa_basi_ddss = sure_format_ddss($saniye_per_sayfa);
                                 }
-                                $saniye_per_sayfa = (int) round((int)$o['sure_saniye'] / $sayfa_adedi);
-                                $sayfa_basi_ddss = sure_format_ddss($saniye_per_sayfa);
+                                $st = (int)($o['sesli_toplam_saniye'] ?? 0);
+                                $bs = (int)($o['bitis_sure_saniye'] ?? 0);
+                                $sesli_pct = ($st > 0 && $bs > 0) ? min(100, (int) round($bs / $st * 100)) : null;
                             ?>
                                 <tr>
                                     <td>
@@ -298,20 +332,37 @@ function sure_format_ddss($saniye) {
                                     <td>
                                         <a href="kitap.php?id=<?= (int)($o['book_id'] ?? 0) ?>"><?= htmlspecialchars($o['kitap_baslik'] ?? '—') ?></a>
                                     </td>
-                                    <td><?= (int) $o['baslama_sayfasi'] ?></td>
-                                    <td><?= $o['bitis_sayfasi'] !== null ? (int) $o['bitis_sayfasi'] : '—' ?></td>
-                                    <td><?= $sayfa_adedi > 0 ? $sayfa_adedi : '—' ?></td>
-                                    <td><?= sure_format_ssddss($o['sure_saniye']) ?></td>
-                                    <td><?= $sayfa_basi_ddss ?></td>
+                                    <?php if ($tip === 1): ?>
+                                        <td><?= (int)($o['baslama_sayfasi'] ?? 0) ?></td>
+                                        <td><?= isset($o['bitis_sayfasi']) && $o['bitis_sayfasi'] !== null ? (int)$o['bitis_sayfasi'] : '—' ?></td>
+                                        <td><?= $sayfa_adedi > 0 ? $sayfa_adedi : '—' ?></td>
+                                        <td><?= sure_format_ssddss($o['sure_saniye'] ?? 0) ?></td>
+                                        <td><?= $sayfa_basi_ddss ?></td>
+                                    <?php elseif ($tip === 2): ?>
+                                        <td><?= isset($o['baslama_yuzde']) && $o['baslama_yuzde'] !== null ? number_format((float)$o['baslama_yuzde'], 1) . '%' : '—' ?></td>
+                                        <td><?= isset($o['bitis_yuzde']) && $o['bitis_yuzde'] !== null ? number_format((float)$o['bitis_yuzde'], 1) . '%' : '—' ?></td>
+                                        <td><?= sure_format_ssddss($o['sure_saniye'] ?? 0) ?></td>
+                                    <?php else: ?>
+                                        <td><?= $bs > 0 ? sure_format_ssddss($bs) : '—' ?></td>
+                                        <td><?= $sesli_pct !== null ? '%' . $sesli_pct : '—' ?></td>
+                                    <?php endif; ?>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
                         <tfoot>
                             <tr style="font-weight: 600; background-color: #f9fafb;">
-                                <td colspan="5">Toplam</td>
-                                <td><?= $gun_toplam_sayfa > 0 ? (int) $gun_toplam_sayfa : '—' ?></td>
-                                <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
-                                <td><?= $gun_ortalama_ddss ?></td>
+                                <?php if ($tip === 1): ?>
+                                    <td colspan="5">Toplam</td>
+                                    <td><?= $gun_toplam_sayfa > 0 ? (int) $gun_toplam_sayfa : '—' ?></td>
+                                    <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
+                                    <td><?= $gun_ortalama_ddss ?></td>
+                                <?php elseif ($tip === 2): ?>
+                                    <td colspan="4">Toplam</td>
+                                    <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
+                                <?php else: ?>
+                                    <td colspan="4">Toplam</td>
+                                    <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
+                                <?php endif; ?>
                             </tr>
                         </tfoot>
                     </table>
@@ -329,8 +380,10 @@ function sure_format_ddss($saniye) {
                 <span class="label">Filtrelenen tüm seanslar:</span>
                 <span><?= (int) $genel_toplam['adet'] ?> seans</span>
                 <span>Toplam süre: <?= sure_format_ssddss($gt_saniye) ?></span>
-                <span>Toplam sayfa: <?= $gt_sayfa ?></span>
-                <span>Sayfa başı ortalama: <?= $gt_ortalama_ddss ?></span>
+                <?php if ($tip === 1): ?>
+                    <span>Toplam sayfa: <?= $gt_sayfa ?></span>
+                    <span>Sayfa başı ortalama: <?= $gt_ortalama_ddss ?></span>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
     <?php else: ?>
@@ -345,6 +398,7 @@ function sure_format_ddss($saniye) {
     $base_params = [
         'baslangic' => $baslangic,
         'bitis' => $bitis,
+        'tip' => $tip,
         'per_page' => $per_page
     ];
     if ($kitap_id > 0) {

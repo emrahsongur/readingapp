@@ -21,19 +21,23 @@ $user_id = $_SESSION['user_id'];
 // Okuma özeti: ilk baslama, son okunan sayfa, toplam süre (ilerleme çubuğu için)
 try {
     $stmt = $pdo->prepare("
-        SELECT k.*, d.durum as durum_adi,
+        SELECT k.*, d.durum as durum_adi, kt.ad as kitap_tipi_adi,
                o.ilk_baslama, o.son_sayfa, o.toplam_saniye, o.son_seans_baslama, o.toplam_okunan_sayfa,
+               o.son_yuzde, o.son_sure_saniye,
                COALESCE(al.alinti_sayisi, 0) as alinti_sayisi,
                COALESCE(du.dusunce_sayisi, 0) as dusunce_sayisi
         FROM kitaplar k
         LEFT JOIN durum d ON k.durum_id = d.id
+        LEFT JOIN kitap_tipleri kt ON k.kitap_tipi_id = kt.id
         LEFT JOIN (
             SELECT book_id,
                    MIN(baslama) as ilk_baslama,
                    MAX(bitis_sayfasi) as son_sayfa,
                    SUM(sure_saniye) as toplam_saniye,
                    MAX(baslama) as son_seans_baslama,
-                   SUM(GREATEST(0, COALESCE(bitis_sayfasi, baslama_sayfasi) - baslama_sayfasi + 1)) as toplam_okunan_sayfa
+                   SUM(GREATEST(0, COALESCE(bitis_sayfasi, baslama_sayfasi) - baslama_sayfasi + 1)) as toplam_okunan_sayfa,
+                   MAX(bitis_yuzde) as son_yuzde,
+                   MAX(bitis_sure_saniye) as son_sure_saniye
             FROM okumalar
             WHERE user_id = :user_id
             GROUP BY book_id
@@ -234,6 +238,7 @@ function sure_format_ssddss($saniye) {
         <div class="book-grid">
             <?php foreach ($kitaplar as $kitap): ?>
                 <?php
+                $tip_id = (int)($kitap['kitap_tipi_id'] ?? 1);
                 $sayfa = (int) $kitap['sayfa'];
                 $baslangic = isset($kitap['baslangic_sayfa']) ? (int)$kitap['baslangic_sayfa'] : 1;
                 $bitis_eff = (isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa'] !== null && $kitap['bitis_sayfa'] !== '') ? (int)$kitap['bitis_sayfa'] : $sayfa;
@@ -243,19 +248,51 @@ function sure_format_ssddss($saniye) {
                 $son_sayfa = (int) ($kitap['son_sayfa'] ?? 0);
                 $toplam_okunabilir = max(0, $bitis_eff - $baslangic + 1);
                 $okunan = max(0, min($son_sayfa - $baslangic + 1, $toplam_okunabilir));
-                $yuzde = $toplam_okunabilir > 0 ? min(100, (int) round(($okunan / $toplam_okunabilir) * 100)) : 0;
+                $yuzde = 0;
+                if ($tip_id === 1) {
+                    $yuzde = $toplam_okunabilir > 0 ? min(100, (int) round(($okunan / $toplam_okunabilir) * 100)) : 0;
+                } elseif ($tip_id === 2) {
+                    $son_yuzde_val = isset($kitap['son_yuzde']) && $kitap['son_yuzde'] !== null && $kitap['son_yuzde'] !== '' ? (float)$kitap['son_yuzde'] : 0;
+                    $yuzde = min(100, (int) round($son_yuzde_val));
+                } elseif ($tip_id === 3) {
+                    $sesli_toplam = (int)($kitap['sesli_toplam_saniye'] ?? 0);
+                    $son_sure = (int)($kitap['son_sure_saniye'] ?? 0);
+                    $yuzde = ($sesli_toplam > 0 && $son_sure > 0) ? min(100, (int) round($son_sure / $sesli_toplam * 100)) : 0;
+                }
                 $toplam_okunan_sayfa = (int) ($kitap['toplam_okunan_sayfa'] ?? 0);
                 $toplam_saniye_kitap = (int) ($kitap['toplam_saniye'] ?? 0);
-                $tahmini_goster = ((int)$kitap['durum_id'] === 2) && $toplam_okunan_sayfa > 0;
-                $kalan_sayfa = max(0, $bitis_eff - $son_sayfa);
-                $saniye_per_sayfa = $toplam_okunan_sayfa > 0 ? $toplam_saniye_kitap / $toplam_okunan_sayfa : 0;
-                $tahmini_saniye = ($kalan_sayfa > 0 && $saniye_per_sayfa > 0) ? (int) round($kalan_sayfa * $saniye_per_sayfa) : 0;
-                if ((int)$kitap['durum_id'] === 2) $toplam_tahmini_saniye += $tahmini_saniye;
+                $tahmini_goster = false;
+                $tahmini_saniye = 0;
+                if ((int)$kitap['durum_id'] === 2) {
+                    if ($tip_id === 1) {
+                        $tahmini_goster = $toplam_okunan_sayfa > 0;
+                        $kalan_sayfa = max(0, $bitis_eff - $son_sayfa);
+                        $saniye_per_sayfa = $toplam_okunan_sayfa > 0 ? $toplam_saniye_kitap / $toplam_okunan_sayfa : 0;
+                        $tahmini_saniye = ($kalan_sayfa > 0 && $saniye_per_sayfa > 0) ? (int) round($kalan_sayfa * $saniye_per_sayfa) : 0;
+                    } elseif ($tip_id === 2) {
+                        $kalan_yuzde = max(0, 100 - $yuzde);
+                        if ($kalan_yuzde > 0 && $yuzde > 0 && $toplam_saniye_kitap > 0) {
+                            $tahmini_goster = true;
+                            $tahmini_saniye = (int) round($toplam_saniye_kitap / $yuzde * $kalan_yuzde);
+                        }
+                    } elseif ($tip_id === 3) {
+                        $sesli_toplam = (int)($kitap['sesli_toplam_saniye'] ?? 0);
+                        $son_sure = (int)($kitap['son_sure_saniye'] ?? 0);
+                        $kalan_sure = max(0, $sesli_toplam - $son_sure);
+                        if ($kalan_sure > 0) {
+                            $tahmini_goster = true;
+                            $tahmini_saniye = $kalan_sure;
+                        }
+                    }
+                    $toplam_tahmini_saniye += $tahmini_saniye;
+                }
+                $devam_url = $tip_id === 1 ? 'oku.php' : ($tip_id === 2 ? 'eoku.php' : 'dinle.php');
+                $devam_label = $tip_id === 1 ? 'Okumaya devam et' : ($tip_id === 2 ? 'Okumaya devam et' : 'Dinlemeye devam et');
                 ?>
                 <div class="book-card">
                     <?php if ($tahmini_goster): ?>
                     <div class="tahmini-kalan">
-                        <?php if ($kalan_sayfa > 0): ?>
+                        <?php if ($tahmini_saniye > 0): ?>
                         <?= sure_format_ssddss($tahmini_saniye) ?>
                         <?php else: ?>
                         Bitti
@@ -263,7 +300,7 @@ function sure_format_ssddss($saniye) {
                     </div>
                     <?php endif; ?>
                     <div class="cover-wrap">
-                        <a href="oku.php?id=<?= (int) $kitap['id'] ?>" class="cover-link" aria-label="Okumaya devam et">
+                        <a href="<?= $devam_url ?>?id=<?= (int) $kitap['id'] ?>" class="cover-link" aria-label="<?= $devam_label ?>">
                             <?php if (!empty($kitap['kapak'])): ?>
                                 <img src="assets/uploads/<?= htmlspecialchars($kitap['kapak']) ?>" class="cover-img" alt="<?= htmlspecialchars($kitap['baslik']) ?>">
                             <?php else: ?>
@@ -285,7 +322,16 @@ function sure_format_ssddss($saniye) {
                             <?php if (!empty($kitap['ilk_baslama'])): ?>
                                 <div><?= date('d.m.Y', strtotime($kitap['ilk_baslama'])) ?></div>
                             <?php endif; ?>
-                            <?php if (isset($kitap['toplam_saniye']) && (int)$kitap['toplam_saniye'] > 0): ?>
+                            <?php if ($tip_id === 2): ?>
+                                <div><?= $yuzde ?>%</div>
+                            <?php elseif ($tip_id === 3): ?>
+                                <?php
+                                $ss = (int)($kitap['son_sure_saniye'] ?? 0);
+                                $st = (int)($kitap['sesli_toplam_saniye'] ?? 0);
+                                $pct = ($st > 0 && $ss > 0) ? min(100, (int)round($ss / $st * 100)) : 0;
+                                ?>
+                                <div><?= sure_format_ssddss($ss) ?> / <?= sure_format_ssddss($st) ?> (<?= $pct ?>%)</div>
+                            <?php elseif (isset($kitap['toplam_saniye']) && (int)$kitap['toplam_saniye'] > 0): ?>
                                 <div><?= sure_format_ssddss($kitap['toplam_saniye']) ?></div>
                             <?php endif; ?>
                         </div>

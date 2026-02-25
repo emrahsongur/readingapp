@@ -20,21 +20,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         header("Location: index.php");
         exit;
     }
+    // E-kitap (2) ve Sesli (3) için sayfa alanları kullanılmıyor
+    $sayfa_baslangic = $_POST['sayfa_baslangic'] ?? '';
+    $sayfa_bitis = $_POST['sayfa_bitis'] ?? '';
+    $stmt_kt = $pdo->prepare("SELECT kitap_tipi_id FROM kitaplar WHERE id = ? AND user_id = ?");
+    $stmt_kt->execute([$redirect_kitap_id, $user_id]);
+    $kitap_tip_row = $stmt_kt->fetch(PDO::FETCH_ASSOC);
+    if ($kitap_tip_row && (int)$kitap_tip_row['kitap_tipi_id'] !== 1) {
+        $sayfa_baslangic = '';
+        $sayfa_bitis = '';
+    }
     $err = null;
     if ($action === 'alinti_ekle') {
         $err = alinti_ekle(
             $pdo, $user_id, $redirect_kitap_id,
             $_POST['alinti'] ?? '',
-            $_POST['sayfa_baslangic'] ?? '',
-            $_POST['sayfa_bitis'] ?? '',
+            $sayfa_baslangic,
+            $sayfa_bitis,
             $_FILES['foto'] ?? null
         );
     } elseif ($action === 'alinti_guncelle') {
         $err = alinti_guncelle(
             $pdo, $user_id, (int)($_POST['alinti_id'] ?? 0), $redirect_kitap_id,
             $_POST['alinti'] ?? '',
-            $_POST['sayfa_baslangic'] ?? '',
-            $_POST['sayfa_bitis'] ?? '',
+            $sayfa_baslangic,
+            $sayfa_bitis,
             $_POST['mevcut_foto'] ?? '',
             $_FILES['foto'] ?? null
         );
@@ -45,16 +55,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $err = dusunce_ekle(
             $pdo, $user_id, $redirect_kitap_id,
             $_POST['dusunce'] ?? '',
-            $_POST['sayfa_baslangic'] ?? '',
-            $_POST['sayfa_bitis'] ?? '',
+            $sayfa_baslangic,
+            $sayfa_bitis,
             $alinti_id
         );
     } elseif ($action === 'dusunce_guncelle') {
         $err = dusunce_guncelle(
             $pdo, $user_id, (int)($_POST['dusunce_id'] ?? 0), $redirect_kitap_id,
             $_POST['dusunce'] ?? '',
-            $_POST['sayfa_baslangic'] ?? '',
-            $_POST['sayfa_bitis'] ?? ''
+            $sayfa_baslangic,
+            $sayfa_bitis
         );
     } elseif ($action === 'dusunce_sil') {
         $err = dusunce_sil($pdo, $user_id, (int)($_POST['dusunce_id'] ?? 0));
@@ -97,6 +107,11 @@ $sayfa = 0;
 $baslangic_sayfa = 1;
 $bitis_sayfa = null;
 $durum_id = 1; // Varsayılan: Okunacak (1)
+$kitap_tipi_id = 1;
+$sesli_toplam_saniye = null;
+$sesli_saat = 0;
+$sesli_dakika = 0;
+$sesli_saniye = 0;
 $mevcut_kapak = '';
 $secili_raflar = [];
 
@@ -114,6 +129,13 @@ if (isset($_GET['id'])) {
         $baslangic_sayfa = isset($kitap['baslangic_sayfa']) ? (int)$kitap['baslangic_sayfa'] : 1;
         $bitis_sayfa = isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa'] !== null && $kitap['bitis_sayfa'] !== '' ? (int)$kitap['bitis_sayfa'] : null;
         $durum_id = $kitap['durum_id'];
+        $kitap_tipi_id = isset($kitap['kitap_tipi_id']) ? (int)$kitap['kitap_tipi_id'] : 1;
+        $sesli_toplam_saniye = isset($kitap['sesli_toplam_saniye']) && $kitap['sesli_toplam_saniye'] !== null && $kitap['sesli_toplam_saniye'] !== '' ? (int)$kitap['sesli_toplam_saniye'] : null;
+        if ($sesli_toplam_saniye !== null && $sesli_toplam_saniye > 0) {
+            $sesli_saat = (int) floor($sesli_toplam_saniye / 3600);
+            $sesli_dakika = (int) floor(($sesli_toplam_saniye % 3600) / 60);
+            $sesli_saniye = (int) ($sesli_toplam_saniye % 60);
+        }
         $mevcut_kapak = $kitap['kapak'];
 
         // Kitabın kayıtlı olduğu rafları çek
@@ -134,6 +156,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $bitis_sayfa_raw = isset($_POST['bitis_sayfa']) && $_POST['bitis_sayfa'] !== '' ? (int)$_POST['bitis_sayfa'] : null;
     $bitis_sayfa = $bitis_sayfa_raw;
     $durum_id = (int)$_POST['durum_id'];
+    $kitap_tipi_id = isset($_POST['kitap_tipi_id']) ? (int)$_POST['kitap_tipi_id'] : 1;
+    $sesli_toplam_saniye = null;
+    if ($kitap_tipi_id === 3) {
+        $sh = (int)($_POST['sesli_saat'] ?? 0);
+        $sd = (int)($_POST['sesli_dakika'] ?? 0);
+        $ss = (int)($_POST['sesli_saniye'] ?? 0);
+        $sesli_toplam_saniye = $sh * 3600 + $sd * 60 + $ss;
+    }
+    // E-kitap ve Sesli için sayfa alanları kullanılmıyor
+    if ($kitap_tipi_id !== 1) {
+        $sayfa = 0;
+        $baslangic_sayfa = 1;
+        $bitis_sayfa = null;
+    }
     $kitap_id = (int)$_POST['kitap_id']; // 0 ise yeni kayıt, değilse güncelleme
     $gelen_raflar = $_POST['raflar'] ?? []; // Seçilen raflar dizisi
 
@@ -149,9 +185,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
     if (empty($baslik) || empty($yazar)) {
             $hata_mesaji = "Başlık ve yazar alanları zorunludur.";
-    } elseif ($bitis_sayfa !== null && $baslangic_sayfa > $bitis_sayfa) {
+    } elseif ($kitap_tipi_id === 3 && ($sesli_toplam_saniye === null || $sesli_toplam_saniye < 1)) {
+        $hata_mesaji = "Sesli kitap için toplam süre (en az 1 saniye) girin.";
+    } elseif ($kitap_tipi_id === 1 && $bitis_sayfa !== null && $baslangic_sayfa > $bitis_sayfa) {
         $hata_mesaji = "Bitiş sayfası, başlangıç sayfasından küçük olamaz.";
-    } elseif ($bitis_sayfa !== null && $sayfa > 0 && $bitis_sayfa > $sayfa) {
+    } elseif ($kitap_tipi_id === 1 && $bitis_sayfa !== null && $sayfa > 0 && $bitis_sayfa > $sayfa) {
         $hata_mesaji = "Bitiş sayfası, toplam sayfa sayısından büyük olamaz.";
     } else {
         // 1. Kapak Fotoğrafı Yükleme İşlemi
@@ -193,14 +231,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
                 if ($kitap_id > 0) {
                     // GÜNCELLEME
-                    $stmt = $pdo->prepare("UPDATE kitaplar SET durum_id=?, baslik=?, yazar=?, kapak=?, sayfa=?, baslangic_sayfa=?, bitis_sayfa=? WHERE id=? AND user_id=?");
-                    $stmt->execute([$durum_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa, $kitap_id, $user_id]);
+                    $stmt = $pdo->prepare("UPDATE kitaplar SET durum_id=?, kitap_tipi_id=?, baslik=?, yazar=?, kapak=?, sayfa=?, baslangic_sayfa=?, bitis_sayfa=?, sesli_toplam_saniye=? WHERE id=? AND user_id=?");
+                    $stmt->execute([$durum_id, $kitap_tipi_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa, $sesli_toplam_saniye, $kitap_id, $user_id]);
                     $islem_yapilan_kitap_id = $kitap_id;
                     $basari_mesaji = "Kitap başarıyla güncellendi.";
                 } else {
                     // YENİ KAYIT
-                    $stmt = $pdo->prepare("INSERT INTO kitaplar (user_id, durum_id, baslik, yazar, kapak, sayfa, baslangic_sayfa, bitis_sayfa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                    $stmt->execute([$user_id, $durum_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa]);
+                    $stmt = $pdo->prepare("INSERT INTO kitaplar (user_id, durum_id, kitap_tipi_id, baslik, yazar, kapak, sayfa, baslangic_sayfa, bitis_sayfa, sesli_toplam_saniye) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$user_id, $durum_id, $kitap_tipi_id, $baslik, $yazar, $kapak_adi, $sayfa, $baslangic_sayfa, $bitis_sayfa, $sesli_toplam_saniye]);
                     $islem_yapilan_kitap_id = $pdo->lastInsertId();
                     $basari_mesaji = "Kitap başarıyla eklendi.";
                 }
@@ -238,6 +276,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
 // Form için Durumları Çek
 $durumlar = $pdo->query("SELECT * FROM durum WHERE aktif = 1")->fetchAll();
+// Form için Kitap Tiplerini Çek (Basılı, Elektronik, Sesli)
+$kitap_tipleri = [];
+try {
+    $kitap_tipleri = $pdo->query("SELECT * FROM kitap_tipleri ORDER BY sira")->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // Migration henüz uygulanmamışsa boş kalır; formda tip seçeneği gizlenir veya default 1
+}
+if (empty($kitap_tipleri)) {
+    $kitap_tipleri = [['id' => 1, 'ad' => 'Basılı', 'sira' => 1]];
+}
 
 // Form için Kullanıcıya Ait Rafları Çek
 $stmtRaflar = $pdo->prepare("SELECT * FROM raflar WHERE user_id = :user_id ORDER BY etiket ASC");
@@ -620,16 +668,38 @@ function kitap_richtext_html($html) {
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="sayfa">Sayfa</label>
-                        <input type="number" id="sayfa" name="sayfa" value="<?= (int)$sayfa ?>" min="0" placeholder="0">
+                        <label for="kitap_tipi_id">Kitap tipi</label>
+                        <select id="kitap_tipi_id" name="kitap_tipi_id">
+                            <?php foreach ($kitap_tipleri as $kt): ?>
+                                <option value="<?= (int)$kt['id'] ?>" <?= $kitap_tipi_id == (int)$kt['id'] ? 'selected' : '' ?>><?= htmlspecialchars($kt['ad']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
-                    <div class="form-group">
-                        <label for="baslangic_sayfa">Başlangıç sayfa</label>
-                        <input type="number" id="baslangic_sayfa" name="baslangic_sayfa" value="<?= $baslangic_sayfa ?>" min="1" placeholder="1">
+                    <div id="kitap-basili-alanlar" class="kitap-tip-alanlar" style="<?= $kitap_tipi_id !== 1 ? 'display:none;' : '' ?>">
+                        <div class="form-group">
+                            <label for="sayfa">Sayfa</label>
+                            <input type="number" id="sayfa" name="sayfa" value="<?= (int)$sayfa ?>" min="0" placeholder="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="baslangic_sayfa">Başlangıç sayfa</label>
+                            <input type="number" id="baslangic_sayfa" name="baslangic_sayfa" value="<?= $baslangic_sayfa ?>" min="1" placeholder="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="bitis_sayfa">Bitiş sayfa</label>
+                            <input type="number" id="bitis_sayfa" name="bitis_sayfa" value="<?= $bitis_sayfa !== null ? (int)$bitis_sayfa : '' ?>" min="1" placeholder="Boş">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="bitis_sayfa">Bitiş sayfa</label>
-                        <input type="number" id="bitis_sayfa" name="bitis_sayfa" value="<?= $bitis_sayfa !== null ? (int)$bitis_sayfa : '' ?>" min="1" placeholder="Boş">
+                    <div id="kitap-sesli-alanlar" class="kitap-tip-alanlar" style="<?= $kitap_tipi_id !== 3 ? 'display:none;' : '' ?>">
+                        <div class="form-group full-width">
+                            <label>Toplam süre (ss:dd:ss)</label>
+                            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                                <input type="number" name="sesli_saat" id="sesli_saat" value="<?= $sesli_saat ?>" min="0" max="999" placeholder="Saat" style="width:5rem;">
+                                <span>:</span>
+                                <input type="number" name="sesli_dakika" id="sesli_dakika" value="<?= $sesli_dakika ?>" min="0" max="59" placeholder="Dk" style="width:4rem;">
+                                <span>:</span>
+                                <input type="number" name="sesli_saniye" id="sesli_saniye" value="<?= $sesli_saniye ?>" min="0" max="59" placeholder="Sn" style="width:4rem;">
+                            </div>
+                        </div>
                     </div>
                     <div class="form-group full-width">
                         <label>Raflar</label>
@@ -883,13 +953,16 @@ function kitap_richtext_html($html) {
                 <div id="modal-alinti-editor" class="rich-editor" contenteditable="true" data-hidden-name="alinti"></div>
                 <input type="hidden" name="alinti" id="modal-alinti-hidden">
             </div>
-            <div class="form-group">
-                <label>Sayfa başlangıç</label>
-                <input type="number" name="sayfa_baslangic" id="modal-alinti-sb" min="1" placeholder="">
-            </div>
-            <div class="form-group">
-                <label>Sayfa bitiş</label>
-                <input type="number" name="sayfa_bitis" id="modal-alinti-sbit" min="1" placeholder="">
+            <?php $kitap_tipi_basili = isset($kitap) && (int)($kitap['kitap_tipi_id'] ?? 1) === 1; ?>
+            <div id="modal-alinti-sayfa-wrap" class="modal-sayfa-alanlari" style="<?= $kitap_tipi_basili ? '' : 'display:none;' ?>">
+                <div class="form-group">
+                    <label>Sayfa başlangıç</label>
+                    <input type="number" name="sayfa_baslangic" id="modal-alinti-sb" min="1" placeholder="">
+                </div>
+                <div class="form-group">
+                    <label>Sayfa bitiş</label>
+                    <input type="number" name="sayfa_bitis" id="modal-alinti-sbit" min="1" placeholder="">
+                </div>
             </div>
             <div class="form-group" id="modal-alinti-foto-wrap">
                 <label>Sayfa fotoğrafı</label>
@@ -942,13 +1015,15 @@ function kitap_richtext_html($html) {
                 <div id="modal-dusunce-editor" class="rich-editor" contenteditable="true" data-hidden-name="dusunce"></div>
                 <input type="hidden" name="dusunce" id="modal-dusunce-hidden">
             </div>
-            <div class="form-group">
-                <label>Sayfa başlangıç</label>
-                <input type="number" name="sayfa_baslangic" id="modal-dusunce-sb" min="1" placeholder="">
-            </div>
-            <div class="form-group">
-                <label>Sayfa bitiş</label>
-                <input type="number" name="sayfa_bitis" id="modal-dusunce-sbit" min="1" placeholder="">
+            <div id="modal-dusunce-sayfa-wrap" class="modal-sayfa-alanlari" style="<?= $kitap_tipi_basili ? '' : 'display:none;' ?>">
+                <div class="form-group">
+                    <label>Sayfa başlangıç</label>
+                    <input type="number" name="sayfa_baslangic" id="modal-dusunce-sb" min="1" placeholder="">
+                </div>
+                <div class="form-group">
+                    <label>Sayfa bitiş</label>
+                    <input type="number" name="sayfa_bitis" id="modal-dusunce-sbit" min="1" placeholder="">
+                </div>
             </div>
             <button type="submit" class="btn btn-primary">Kaydet</button>
             <button type="button" class="btn btn-cancel" onclick="closeModal('modal-dusunce')">İptal</button>
@@ -981,13 +1056,15 @@ function kitap_richtext_html($html) {
                 <div id="modal-dusunce-edit-editor" class="rich-editor" contenteditable="true"></div>
                 <input type="hidden" name="dusunce" id="modal-dusunce-edit-hidden">
             </div>
-            <div class="form-group">
-                <label>Sayfa başlangıç</label>
-                <input type="number" name="sayfa_baslangic" id="modal-dusunce-edit-sb" min="1" placeholder="">
-            </div>
-            <div class="form-group">
-                <label>Sayfa bitiş</label>
-                <input type="number" name="sayfa_bitis" id="modal-dusunce-edit-sbit" min="1" placeholder="">
+            <div id="modal-dusunce-edit-sayfa-wrap" class="modal-sayfa-alanlari" style="<?= $kitap_tipi_basili ? '' : 'display:none;' ?>">
+                <div class="form-group">
+                    <label>Sayfa başlangıç</label>
+                    <input type="number" name="sayfa_baslangic" id="modal-dusunce-edit-sb" min="1" placeholder="">
+                </div>
+                <div class="form-group">
+                    <label>Sayfa bitiş</label>
+                    <input type="number" name="sayfa_bitis" id="modal-dusunce-edit-sbit" min="1" placeholder="">
+                </div>
             </div>
             <button type="submit" class="btn btn-primary">Güncelle</button>
             <button type="button" class="btn btn-cancel" onclick="closeModal('modal-dusunce-edit')">İptal</button>
@@ -1072,6 +1149,19 @@ function kitap_richtext_html($html) {
 <script>
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+(function() {
+    var tipSelect = document.getElementById('kitap_tipi_id');
+    var basili = document.getElementById('kitap-basili-alanlar');
+    var sesli = document.getElementById('kitap-sesli-alanlar');
+    if (tipSelect && basili && sesli) {
+        function toggleKitapTipAlanlar() {
+            var v = parseInt(tipSelect.value, 10);
+            basili.style.display = (v === 1) ? '' : 'none';
+            sesli.style.display = (v === 3) ? '' : 'none';
+        }
+        tipSelect.addEventListener('change', toggleKitapTipAlanlar);
+    }
+})();
 function toggleAccordion(id) {
     var body = document.getElementById(id + '-body');
     var toggle = document.getElementById(id + '-toggle');
