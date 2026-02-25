@@ -460,6 +460,14 @@ function kitap_richtext_html($html) {
         .modal-close { position: absolute; right: 1rem; top: 0.5rem; font-size: 1.5rem; cursor: pointer; color: #6b7280; }
         .modal-close:hover { color: #111; }
         .modal-dusunce-content { max-width: 560px; }
+        .modal-dusunce-voice-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+        .modal-dusunce-btn-mic { min-width: 44px; min-height: 44px; padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; background: #6b7280; color: white; }
+        .modal-dusunce-btn-mic.recording { background: #dc2626; }
+        .modal-dusunce-btn-mic.stopped { background: #059669; }
+        .modal-dusunce-btn-gemini-duzelt { padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; background: #6366f1; color: white; }
+        .modal-dusunce-btn-gemini-duzelt:hover { background: #4f46e5; }
+        .modal-dusunce-btn-gemini-duzelt:disabled { opacity: 0.6; cursor: not-allowed; }
+        .modal-dusunce-transcribe { width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box; font-family: inherit; min-height: 80px; resize: vertical; }
         .modal-dusunce-alinti-block { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb; }
         .modal-dusunce-alinti-block strong { display: block; margin-bottom: 0.35rem; color: #374151; }
         .alinti-onay { font-size: 0.95rem; color: #374151; margin-bottom: 0.75rem; line-height: 1.4; max-height: 180px; overflow-y: auto; }
@@ -910,6 +918,14 @@ function kitap_richtext_html($html) {
             <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
             <input type="hidden" name="alinti_id" id="dusunce_alinti_id" value="">
             <div class="form-group">
+                <label>Sesle kaydet</label>
+                <div class="modal-dusunce-voice-row">
+                    <button type="button" class="modal-dusunce-btn-mic" id="modal-dusunce-mic-btn">🎤 Mikrofon</button>
+                    <button type="button" class="modal-dusunce-btn-gemini-duzelt" id="modal-dusunce-gemini-duzelt-btn">Gemini ile düzelt</button>
+                </div>
+                <textarea id="modal-dusunce-transcribe" class="modal-dusunce-transcribe" placeholder="Ses kaydı metni buraya yazılacak veya elle yazıp düzeltebilirsiniz..."></textarea>
+            </div>
+            <div class="form-group">
                 <label>Düşünce *</label>
                 <div class="rich-toolbar" id="toolbar-dusunce">
                     <button type="button" onclick="richCmd('modal-dusunce-editor','bold')" title="Kalın">B</button>
@@ -1154,6 +1170,10 @@ function openDusunceModal(alintiId, btn) {
     document.getElementById('modal-dusunce-editor').innerHTML = '';
     document.getElementById('modal-dusunce-sb').value = '';
     document.getElementById('modal-dusunce-sbit').value = '';
+    var transcribeEl = document.getElementById('modal-dusunce-transcribe');
+    if (transcribeEl) { transcribeEl.value = ''; transcribeEl.placeholder = 'Ses kaydı metni buraya yazılacak veya elle yazıp düzeltebilirsiniz...'; }
+    var micBtn = document.getElementById('modal-dusunce-mic-btn');
+    if (micBtn) { micBtn.classList.remove('recording', 'stopped'); micBtn.textContent = '🎤 Mikrofon'; }
     var panel = document.getElementById('modal-dusunce-alinti-panel');
     if (alintiId && alintiData) {
         panel.style.display = 'block';
@@ -1167,6 +1187,100 @@ function openDusunceModal(alintiId, btn) {
     }
     openModal('modal-dusunce');
 }
+(function() {
+    var micBtn = document.getElementById('modal-dusunce-mic-btn');
+    var geminiDuzeltBtn = document.getElementById('modal-dusunce-gemini-duzelt-btn');
+    var transcribeEl = document.getElementById('modal-dusunce-transcribe');
+    var editorEl = document.getElementById('modal-dusunce-editor');
+    if (!micBtn || !transcribeEl) return;
+    var mediaRecorder = null, audioChunks = [];
+    micBtn.addEventListener('click', function() {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+            micBtn.classList.remove('recording');
+            micBtn.classList.add('stopped');
+            micBtn.textContent = '✓ Durduruldu';
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            alert('Bu tarayıcı mikrofon kaydını desteklemiyor.');
+            return;
+        }
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+            var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm' : 'audio/ogg';
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            mediaRecorder.ondataavailable = function(e) { if (e.data.size > 0) audioChunks.push(e.data); };
+            mediaRecorder.onstop = function() {
+                stream.getTracks().forEach(function(t) { t.stop(); });
+                if (audioChunks.length === 0) return;
+                var blob = new Blob(audioChunks, { type: mime });
+                var fd = new FormData();
+                fd.append('action', 'transcribe');
+                fd.append('audio', blob, 'audio.webm');
+                transcribeEl.placeholder = 'Dönüştürülüyor...';
+                fetch('gemini_dusunce.php', { method: 'POST', body: fd })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        transcribeEl.placeholder = 'Ses kaydı metni buraya yazılacak veya elle yazıp düzeltebilirsiniz...';
+                        if (data.error) { alert(data.error); return; }
+                        var prev = transcribeEl.value;
+                        transcribeEl.value = prev ? prev + '\n' + (data.text || '') : (data.text || '');
+                    })
+                    .catch(function() {
+                        transcribeEl.placeholder = 'Ses kaydı metni buraya yazılacak veya elle yazıp düzeltebilirsiniz...';
+                        alert('Ses dönüştürme başarısız.');
+                    });
+            };
+            mediaRecorder.start();
+            micBtn.classList.add('recording');
+            micBtn.classList.remove('stopped');
+            micBtn.textContent = '⏹ Kaydı Durdur';
+        }).catch(function() { alert('Mikrofon erişimi verilmedi.'); });
+    });
+    if (geminiDuzeltBtn && editorEl) {
+        geminiDuzeltBtn.addEventListener('click', function() {
+            var ham = transcribeEl.value.trim();
+            if (ham === '') {
+                alert('Önce ses kaydı yapıp metne dönüştürün veya yukarıdaki alana metin yazın.');
+                return;
+            }
+            geminiDuzeltBtn.disabled = true;
+            geminiDuzeltBtn.textContent = 'Düzeltiliyor...';
+            var fd = new FormData();
+            fd.append('action', 'duzelt');
+            fd.append('metin', ham);
+            fetch('gemini_dusunce.php', { method: 'POST', body: fd })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    geminiDuzeltBtn.disabled = false;
+                    geminiDuzeltBtn.textContent = 'Gemini ile düzelt';
+                    if (data.error) { alert(data.error); return; }
+                    var txt = (data.text || '').trim();
+                    if (txt) {
+                        editorEl.focus();
+                        var sel = window.getSelection();
+                        var range = document.createRange();
+                        if (editorEl.childNodes.length) {
+                            range.setStart(editorEl, editorEl.childNodes.length);
+                            range.collapse(true);
+                        } else {
+                            range.setStart(editorEl, 0);
+                            range.collapse(true);
+                        }
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        document.execCommand('insertText', false, txt);
+                    }
+                })
+                .catch(function() {
+                    geminiDuzeltBtn.disabled = false;
+                    geminiDuzeltBtn.textContent = 'Gemini ile düzelt';
+                    alert('Düzeltme isteği başarısız.');
+                });
+        });
+    }
+})();
 function openDusunceEditModal(el) {
     var d = JSON.parse(el.getAttribute('data-dusunce-json'));
     document.getElementById('dusunce_edit_id').value = d.id;
