@@ -156,6 +156,8 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         $tahmini_bitis_metin = date('d.m.Y', $tahmini_bitis_ts) . ' ' . $tahmini_bitis_metin;
     }
 }
+
+$kitap_bitti = (int)($kitap['durum_id'] ?? 0) === 3;
 ?>
 <!DOCTYPE html>
 <html lang="tr">
@@ -246,6 +248,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         #dusunceModal .dusunce-rich-toolbar button:hover { background: #e5e7eb; }
         #dusunceModal .dusunce-editor { min-height: 120px; padding: 0.75rem; border: 2px solid #d1d5db; border-radius: 8px; background: #fff; font-family: inherit; font-size: 1rem; overflow-y: auto; }
         #dusunceModal .dusunce-editor:focus { outline: none; border-color: #2563eb; }
+        .kitap-bitti-message { text-align: center; font-size: 1.1rem; color: #9ca3af; margin-bottom: 1.5rem; padding: 0 1rem; }
     </style>
 </head>
 <body<?= !empty($kitap['kapak']) ? ' class="has-cover"' : '' ?>>
@@ -256,14 +259,27 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     <?php endif; ?>
     <div class="top-bar-text">
         <h2><a href="kitap.php?id=<?= (int)$book_id ?>" target="_blank" rel="noopener"><?= htmlspecialchars($kitap['baslik']) ?></a></h2>
+        <?php if ($kitap_bitti): ?>
+        <p><?= htmlspecialchars($kitap['yazar']) ?> &bull; Kitap bitti – alıntı ve düşünce ekleyebilirsiniz</p>
+        <?php else: ?>
         <p><?= htmlspecialchars($kitap['yazar']) ?> &bull; Başlangıç: Sayfa <?= $baslama_sayfasi ?></p>
         <?php if ($tahmini_bitis_metin !== ''): ?>
         <p class="tahmini-bitis">Tahmini bitiş: <?= htmlspecialchars($tahmini_bitis_metin) ?></p>
+        <?php endif; ?>
         <?php endif; ?>
     </div>
 </div>
 
 <div class="timer-container">
+    <?php if ($kitap_bitti): ?>
+    <div class="kitap-bitti-message" id="kitapBittiMessage">Bu kitap bitti. Sadece alıntı ve düşünce ekleyebilirsiniz.</div>
+    <div style="width: 100%; max-width: 400px; padding: 0 1rem; box-sizing: border-box;">
+        <button type="button" class="btn btn-alinti" id="alintiEkleBtn">📷 Alıntı Ekle</button>
+        <button type="button" class="btn btn-dusunce" id="dusunceEkleBtn">💭 Düşünce Ekle</button>
+        <a href="index.php" class="btn-cancel" onclick="return true;">Vazgeç ve Çık</a>
+        <button type="button" class="btn btn-ana-sayfa" id="anaSayfaBtn">Ana Sayfa</button>
+    </div>
+    <?php else: ?>
     <div class="status-text" id="statusText">Seansı başlatmak için Dokunun</div>
     <div class="timer-row">
         <span class="timer-label">Geçen süre</span>
@@ -285,6 +301,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         <a href="index.php" class="btn-cancel" onclick="return confirmExit();">Vazgeç ve Çık</a>
         <button type="button" class="btn btn-ana-sayfa" id="anaSayfaBtn">Ana Sayfa</button>
     </div>
+    <?php endif; ?>
 </div>
 
 <div class="modal-overlay" id="alintiModal" style="display:none;">
@@ -382,8 +399,15 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     // PHP'den gelen kitap ID'sini al (LocalStorage anahtarı için benzersiz olmalı)
     const bookId = <?= $book_id ?>;
     const storageKey = 'reading_session_book_' + bookId;
+    const kitapBitti = <?= $kitap_bitti ? 'true' : 'false'; ?>;
 
-    // Arayüz Elementleri
+    var isRunning = false;
+    var timerPausedByModal = false;
+    var pauseTimer = function() {};
+    var startTimer = function() {};
+
+    if (!kitapBitti) {
+    // Arayüz Elementleri (sadece seans modunda)
     const display = document.getElementById('display');
     const clockEl = document.getElementById('clock');
     const startBtn = document.getElementById('startBtn');
@@ -499,7 +523,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         }
     });
 
-    function startTimer() {
+    startTimer = function() {
         if (!isRunning) {
             isRunning = true;
             startTime = Date.now();
@@ -511,9 +535,9 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
             timerInterval = setInterval(tick, 1000);
             resetBtn.classList.remove('visible');
         }
-    }
+    };
 
-    function pauseTimer() {
+    pauseTimer = function() {
         if (isRunning) {
             var elapsed = getCurrentSeconds();
             isRunning = false;
@@ -530,9 +554,9 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
             saveToStorage();
             resetBtn.classList.add('visible');
         }
-    }
+    };
 
-    // --- 4. EVENT LİSTENER'LAR ---
+    // --- 4. EVENT LİSTENER'LAR (seans) ---
     startBtn.addEventListener('click', startTimer);
     pauseBtn.addEventListener('click', pauseTimer);
 
@@ -563,6 +587,7 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
         releaseWakeLock();
         resetBtn.classList.remove('visible');
     });
+    }
 
     // --- Alıntı foto modal (açıkken sayaç durar, kapanınca devam eder) ---
     const alintiModal = document.getElementById('alintiModal');
@@ -915,8 +940,10 @@ if ($toplam_sayfa > 0 && $kalan_sayfa > 0) {
     }, 600000);
 
     window.onload = () => {
-        loadFromStorage();
-        setInterval(updateClock, 1000);
+        if (!kitapBitti) {
+            loadFromStorage();
+            setInterval(updateClock, 1000);
+        }
     };
 </script>
 
