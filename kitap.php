@@ -877,7 +877,7 @@ function kitap_richtext_html($html) {
                     <thead>
                         <tr>
                             <?php if ($kt_tablo === 1): ?>
-                            <th>Seans başlangıç</th>
+                            <th>Seans</th>
                             <th>Seans bitiş</th>
                             <th>Başlama sayfası</th>
                             <th>Bitiş sayfası</th>
@@ -894,11 +894,9 @@ function kitap_richtext_html($html) {
                             <th>İşlem</th>
                             <?php else: ?>
                             <th>Seans başlangıç</th>
-                            <th>Seans bitiş</th>
-                            <th>Konum (baş)</th>
-                            <th>Konum (bit)</th>
-                            <th>Oynatılan</th>
-                            <th>Seans süresi</th>
+                            <th>Başlangıç</th>
+                            <th>Bitiş</th>
+                            <th>Süre</th>
                             <th>İşlem</th>
                             <?php endif; ?>
                         </tr>
@@ -908,7 +906,13 @@ function kitap_richtext_html($html) {
                         $toplam_seans_tablo_saniye = 0;
                         $genel_ortalama_ddss = '—';
                         foreach ($kitap_okumalari as $o):
-                            $seans_sure_row = seans_sure_zamandan($o['baslama'] ?? null, $o['bitis'] ?? null, $o['sure_saniye'] ?? 0);
+                            if ($kt_tablo === 1 || $kt_tablo === 2) {
+                                // Basili ve e-kitapta tablo suresi: kaydedilen sayac suresi
+                                $seans_sure_row = max(0, (int)($o['sure_saniye'] ?? 0));
+                            } else {
+                                // Seslide tablo suresi: oynatilan (konum farki)
+                                $seans_sure_row = max(0, (int)($o['bitis_sure_saniye'] ?? 0) - (int)($o['baslama_sure_saniye'] ?? 0));
+                            }
                             $toplam_seans_tablo_saniye += $seans_sure_row;
                             if ($kt_tablo === 1) {
                                 $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
@@ -941,10 +945,8 @@ function kitap_richtext_html($html) {
                                 $delta_k = max(0, $bt - $bs);
                             ?>
                             <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
-                            <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
                             <td><?= sure_format_ssddss($bs) ?></td>
                             <td><?= sure_format_ssddss($bt) ?></td>
-                            <td><?= sure_format_ssddss($delta_k) ?></td>
                             <td><?= sure_format_ssddss($seans_sure_row) ?></td>
                             <td><a href="#" class="btn-link" data-okuma-json="<?= $okuma_json ?>" onclick="openOkumaSeansModal(this); return false;">Düzenle</a></td>
                             <?php endif; ?>
@@ -964,11 +966,11 @@ function kitap_richtext_html($html) {
                             <td><?= $genel_ortalama_ddss ?></td>
                             <td></td>
                             <?php elseif ($kt_tablo === 2): ?>
-                            <td colspan="4">Toplam</td>
+                            <td colspan="3">Toplam</td>
                             <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
                             <td></td>
                             <?php else: ?>
-                            <td colspan="5">Toplam (seans süreleri)</td>
+                            <td colspan="3">Toplam</td>
                             <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
                             <td></td>
                             <?php endif; ?>

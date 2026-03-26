@@ -319,14 +319,11 @@ $kitap_bitti = (int)($kitap['durum_id'] ?? 0) === 3;
             <input type="hidden" name="action" value="save_session">
             <input type="hidden" name="book_id" value="<?= $book_id ?>">
             <input type="hidden" name="sure_saniye" id="formSureSaniye" value="0">
+            <input type="hidden" name="baslama_yuzde" id="baslama_yuzde" value="<?= number_format($baslama_yuzde, 1, '.', '') ?>">
             <div class="form-group">
-                <label for="baslama_yuzde">Başlangıç % (0–100)</label>
-                <input type="number" name="baslama_yuzde" id="baslama_yuzde" min="0" max="100" step="0.1" value="<?= number_format($baslama_yuzde, 1, '.', '') ?>">
-                <p style="font-size:0.8rem; color:#6b7280; margin-top:0.35rem;">Son kayıttan gelen değer; gerekirse düzenleyin.</p>
-            </div>
-            <div class="form-group">
-                <label for="bitis_yuzde">Bitiş % (0–100)</label>
+                <label for="bitis_yuzde">Son kalınan % (0–100)</label>
                 <input type="number" id="bitis_yuzde" name="bitis_yuzde" min="0" max="100" step="0.1" value="<?= $baslama_yuzde >= 100 ? 100 : number_format($baslama_yuzde, 1, '.', '') ?>" required>
+                <p style="font-size:0.8rem; color:#6b7280; margin-top:0.35rem;">Başlangıç %: <?= number_format($baslama_yuzde, 1, '.', '') ?> (önceki seanstan)</p>
                 <button type="button" id="kitapBittiBtn" style="margin-top:0.5rem; padding:0.4rem 0.8rem; font-size:0.9rem; background:#10b981; color:white; border:none; border-radius:4px; cursor:pointer;">Kitabı bitirdim (%100)</button>
             </div>
             <div class="modal-buttons">
