@@ -407,8 +407,9 @@ $kitap_bitti = (int)($kitap['durum_id'] ?? 0) === 3;
 
     function pauseTimer() {
         if (isRunning) {
+            const elapsed = getCurrentSeconds();
             isRunning = false;
-            pausedAccumulatedSeconds = getCurrentSeconds();
+            pausedAccumulatedSeconds = elapsed;
             startTime = null;
             clearInterval(timerInterval);
             if (pauseBtn) pauseBtn.style.display = 'none';
@@ -441,11 +442,12 @@ $kitap_bitti = (int)($kitap['durum_id'] ?? 0) === 3;
 
         if (stopBtn) stopBtn.addEventListener('click', function() {
             pauseTimer();
-            if (getCurrentSeconds() < 10) {
+            const secAfterPause = getCurrentSeconds();
+            if (secAfterPause < 10) {
                 alert("Seans çok kısa! En az 10 saniye okumalısınız.");
                 return;
             }
-            formSureSaniye.value = String(Math.floor(getCurrentSeconds()));
+            formSureSaniye.value = String(Math.floor(secAfterPause));
             endModal.style.display = 'flex';
             if (bitisYuzdeInput) bitisYuzdeInput.focus();
         });
