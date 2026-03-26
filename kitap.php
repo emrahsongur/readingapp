@@ -361,7 +361,8 @@ if ($kitap_id > 0) {
     // Bu kitaba ait okuma seansları (tek tablo, gruplama yok)
     $kitap_okumalari = [];
     $stmtOku = $pdo->prepare("
-        SELECT o.id, o.book_id, o.baslama, o.bitis, o.sure_saniye, o.baslama_sayfasi, o.bitis_sayfasi
+        SELECT o.id, o.book_id, o.baslama, o.bitis, o.sure_saniye, o.baslama_sayfasi, o.bitis_sayfasi,
+               o.baslama_yuzde, o.bitis_yuzde, o.baslama_sure_saniye, o.bitis_sure_saniye
         FROM okumalar o
         WHERE o.user_id = :user_id AND o.book_id = :book_id
         ORDER BY o.baslama DESC
@@ -369,26 +370,63 @@ if ($kitap_id > 0) {
     $stmtOku->execute(['user_id' => $user_id, 'book_id' => $kitap_id]);
     $kitap_okumalari = $stmtOku->fetchAll(PDO::FETCH_ASSOC);
 
-    // Tahmini kalan okuma süresi: ortalama sayfa/saniye * kalan sayfa
+    $kitap_tip_oku = (int)($kitap['kitap_tipi_id'] ?? 1);
     $toplam_saniye_kitap = 0;
     $toplam_okunan_sayfa = 0;
-    foreach ($kitap_okumalari as $o) {
-        $toplam_saniye_kitap += (int) $o['sure_saniye'];
-        $adet = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
-        if ($adet > 0) $toplam_okunan_sayfa += $adet;
-    }
-    $saniye_per_sayfa = $toplam_okunan_sayfa > 0 ? $toplam_saniye_kitap / $toplam_okunan_sayfa : 0;
+    $tahmini_saniye = 0;
+    $tahmini_kalan_goster = false;
+    $kalan_sayfa = 0;
+    $saniye_per_sayfa = 0;
     $bitis_sayfa_kitap = (isset($kitap['bitis_sayfa']) && $kitap['bitis_sayfa'] !== null && $kitap['bitis_sayfa'] !== '') ? (int)$kitap['bitis_sayfa'] : (int)$kitap['sayfa'];
-    $son_sayfa = 0;
-    if (count($kitap_okumalari) > 0) {
-        $son_sayfa = (int)($kitap_okumalari[0]['bitis_sayfasi'] ?? 0);
-        if ($son_sayfa < 1) $son_sayfa = (int)$kitap_okumalari[0]['baslama_sayfasi'];
-    } else {
-        $son_sayfa = isset($kitap['baslangic_sayfa']) && (int)$kitap['baslangic_sayfa'] > 0 ? (int)$kitap['baslangic_sayfa'] : 1;
+    $son_sayfa = isset($kitap['baslangic_sayfa']) && (int)$kitap['baslangic_sayfa'] > 0 ? (int)$kitap['baslangic_sayfa'] : 1;
+
+    if ($kitap_tip_oku === 1) {
+        foreach ($kitap_okumalari as $o) {
+            $toplam_saniye_kitap += (int) $o['sure_saniye'];
+            $adet = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
+            if ($adet > 0) $toplam_okunan_sayfa += $adet;
+        }
+        $saniye_per_sayfa = $toplam_okunan_sayfa > 0 ? $toplam_saniye_kitap / $toplam_okunan_sayfa : 0;
+        if (count($kitap_okumalari) > 0) {
+            $son_sayfa = (int)($kitap_okumalari[0]['bitis_sayfasi'] ?? 0);
+            if ($son_sayfa < 1) $son_sayfa = (int)$kitap_okumalari[0]['baslama_sayfasi'];
+        }
+        $kalan_sayfa = max(0, $bitis_sayfa_kitap - $son_sayfa);
+        $tahmini_saniye = $toplam_okunan_sayfa > 0 && $kalan_sayfa > 0 ? (int) round($kalan_sayfa * $saniye_per_sayfa) : 0;
+        $tahmini_kalan_goster = $toplam_okunan_sayfa > 0;
+    } elseif ($kitap_tip_oku === 2) {
+        $toplam_yuzde_delta = 0;
+        $son_yuzde = 0;
+        foreach ($kitap_okumalari as $o) {
+            $toplam_saniye_kitap += (int)($o['sure_saniye'] ?? 0);
+            $by = (float)($o['baslama_yuzde'] ?? 0);
+            $bit = (float)($o['bitis_yuzde'] ?? 0);
+            $d = $bit - $by;
+            if ($d > 0) {
+                $toplam_yuzde_delta += $d;
+            }
+        }
+        if (count($kitap_okumalari) > 0) {
+            $son_yuzde = (float)($kitap_okumalari[0]['bitis_yuzde'] ?? 0);
+        }
+        $kalan_yuzde = max(0, 100 - $son_yuzde);
+        if ($kalan_yuzde > 0 && $son_yuzde > 0 && $toplam_saniye_kitap > 0) {
+            $tahmini_saniye = (int) round($toplam_saniye_kitap / $son_yuzde * $kalan_yuzde);
+        }
+        $tahmini_kalan_goster = $toplam_yuzde_delta > 0 && $kalan_yuzde > 0 && (int)($kitap['durum_id'] ?? 0) === 2;
+    } elseif ($kitap_tip_oku === 3) {
+        foreach ($kitap_okumalari as $o) {
+            $toplam_saniye_kitap += (int)($o['sure_saniye'] ?? 0);
+        }
+        $sesli_top = (int)($kitap['sesli_toplam_saniye'] ?? 0);
+        $son_sure_k = 0;
+        if (count($kitap_okumalari) > 0 && $kitap_okumalari[0]['bitis_sure_saniye'] !== null && $kitap_okumalari[0]['bitis_sure_saniye'] !== '') {
+            $son_sure_k = (int)$kitap_okumalari[0]['bitis_sure_saniye'];
+        }
+        $kalan_sure_k = max(0, $sesli_top - $son_sure_k);
+        $tahmini_saniye = $kalan_sure_k;
+        $tahmini_kalan_goster = $sesli_top > 0 && $kalan_sure_k > 0 && (int)($kitap['durum_id'] ?? 0) === 2;
     }
-    $kalan_sayfa = max(0, $bitis_sayfa_kitap - $son_sayfa);
-    $tahmini_saniye = $toplam_okunan_sayfa > 0 && $kalan_sayfa > 0 ? (int) round($kalan_sayfa * $saniye_per_sayfa) : 0;
-    $tahmini_kalan_goster = $toplam_okunan_sayfa > 0;
 } else {
     $kitap_okumalari = [];
     $toplam_saniye_kitap = 0;
@@ -404,6 +442,16 @@ function sure_format_ssddss($saniye) {
 function sure_format_ddss($saniye) {
     $s = (int) $saniye;
     return sprintf('%02d:%02d', (int) floor($s / 60), $s % 60);
+}
+function seans_sure_zamandan($baslama, $bitis, $fallback = 0) {
+    if (!empty($baslama) && !empty($bitis)) {
+        $t1 = strtotime((string)$baslama);
+        $t2 = strtotime((string)$bitis);
+        if ($t1 !== false && $t2 !== false && $t2 >= $t1) {
+            return (int)($t2 - $t1);
+        }
+    }
+    return max(0, (int)$fallback);
 }
 $alinti_hata = isset($_GET['alinti_hata']) ? trim($_GET['alinti_hata']) : '';
 
@@ -732,10 +780,16 @@ function kitap_richtext_html($html) {
     <hr style="border:0; border-top:1px solid #e5e7eb; margin: 2rem 0;">
     <?php if (count($kitap_okumalari) > 0 && $tahmini_kalan_goster): ?>
     <div class="tahmini-kalan" style="margin-bottom: 1rem;">
-        <?php if ($kalan_sayfa > 0): ?>
-        <strong>Tahmini kalan okuma süresi:</strong> <?= sure_format_ssddss($tahmini_saniye) ?> (<?= $kalan_sayfa ?> sayfa)
+        <?php if ((int)($kitap['kitap_tipi_id'] ?? 1) === 1): ?>
+            <?php if ($kalan_sayfa > 0): ?>
+            <strong>Tahmini kalan okuma süresi:</strong> <?= sure_format_ssddss($tahmini_saniye) ?> (<?= $kalan_sayfa ?> sayfa)
+            <?php else: ?>
+            <strong>Kitabı bitirdiniz.</strong> Ortalama okuma hızınız: sayfa başı <?= $toplam_okunan_sayfa > 0 ? sure_format_ddss((int)round($toplam_saniye_kitap / $toplam_okunan_sayfa)) : '—' ?>
+            <?php endif; ?>
+        <?php elseif ((int)($kitap['kitap_tipi_id'] ?? 1) === 2): ?>
+            <strong>Tahmini kalan okuma süresi (e-kitap):</strong> <?= sure_format_ssddss($tahmini_saniye) ?>
         <?php else: ?>
-        <strong>Kitabı bitirdiniz.</strong> Ortalama okuma hızınız: sayfa başı <?= sure_format_ddss((int)round($toplam_saniye_kitap / $toplam_okunan_sayfa)) ?>
+            <strong>Kalan dinleme süresi:</strong> <?= sure_format_ssddss($tahmini_saniye) ?>
         <?php endif; ?>
     </div>
     <?php endif; ?>
@@ -748,41 +802,95 @@ function kitap_richtext_html($html) {
         <div class="accordion-body" id="accordion-okuma-body">
             <div class="table-container">
                 <table>
+                    <?php $kt_tablo = (int)($kitap['kitap_tipi_id'] ?? 1); ?>
                     <thead>
                         <tr>
-                            <th>Tarih / Saat</th>
+                            <?php if ($kt_tablo === 1): ?>
+                            <th>Seans başlangıç</th>
+                            <th>Seans bitiş</th>
                             <th>Başlama sayfası</th>
                             <th>Bitiş sayfası</th>
                             <th>Okunan sayfa</th>
                             <th>Süre</th>
                             <th>Sayfa başı</th>
+                            <?php elseif ($kt_tablo === 2): ?>
+                            <th>Seans başlangıç</th>
+                            <th>Seans bitiş</th>
+                            <th>Başlangıç %</th>
+                            <th>Bitiş %</th>
+                            <th>Süre</th>
+                            <?php else: ?>
+                            <th>Seans başlangıç</th>
+                            <th>Seans bitiş</th>
+                            <th>Konum (baş)</th>
+                            <th>Konum (bit)</th>
+                            <th>Oynatılan</th>
+                            <th>Seans süresi</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody>
                         <?php
-                        $genel_ortalama_ddss = $toplam_okunan_sayfa > 0 ? sure_format_ddss((int) round($toplam_saniye_kitap / $toplam_okunan_sayfa)) : '—';
+                        $toplam_seans_tablo_saniye = 0;
+                        $genel_ortalama_ddss = '—';
                         foreach ($kitap_okumalari as $o):
-                            $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
-                            if ($sayfa_adedi < 1) $sayfa_adedi = 1;
-                            $saniye_per_sayfa = (int) round((int)$o['sure_saniye'] / $sayfa_adedi);
-                            $sayfa_basi_ddss = sure_format_ddss($saniye_per_sayfa);
+                            $seans_sure_row = seans_sure_zamandan($o['baslama'] ?? null, $o['bitis'] ?? null, $o['sure_saniye'] ?? 0);
+                            $toplam_seans_tablo_saniye += $seans_sure_row;
+                            if ($kt_tablo === 1) {
+                                $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)$o['baslama_sayfasi'] + 1;
+                                if ($sayfa_adedi < 1) $sayfa_adedi = 1;
+                                $saniye_per_sayfa_row = (int) round($seans_sure_row / $sayfa_adedi);
+                                $sayfa_basi_ddss = sure_format_ddss($saniye_per_sayfa_row);
+                            }
                         ?>
                         <tr>
+                            <?php if ($kt_tablo === 1): ?>
                             <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                            <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
                             <td><?= (int) $o['baslama_sayfasi'] ?></td>
                             <td><?= $o['bitis_sayfasi'] !== null ? (int) $o['bitis_sayfasi'] : '—' ?></td>
                             <td><?= $sayfa_adedi ?></td>
-                            <td><?= sure_format_ssddss($o['sure_saniye']) ?></td>
+                            <td><?= sure_format_ssddss($seans_sure_row) ?></td>
                             <td><?= $sayfa_basi_ddss ?></td>
+                            <?php elseif ($kt_tablo === 2): ?>
+                            <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                            <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
+                            <td><?= isset($o['baslama_yuzde']) && $o['baslama_yuzde'] !== null ? number_format((float)$o['baslama_yuzde'], 1) . '%' : '—' ?></td>
+                            <td><?= isset($o['bitis_yuzde']) && $o['bitis_yuzde'] !== null ? number_format((float)$o['bitis_yuzde'], 1) . '%' : '—' ?></td>
+                            <td><?= sure_format_ssddss($seans_sure_row) ?></td>
+                            <?php else:
+                                $bs = (int)($o['baslama_sure_saniye'] ?? 0);
+                                $bt = (int)($o['bitis_sure_saniye'] ?? 0);
+                                $delta_k = max(0, $bt - $bs);
+                            ?>
+                            <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                            <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
+                            <td><?= sure_format_ssddss($bs) ?></td>
+                            <td><?= sure_format_ssddss($bt) ?></td>
+                            <td><?= sure_format_ssddss($delta_k) ?></td>
+                            <td><?= sure_format_ssddss($seans_sure_row) ?></td>
+                            <?php endif; ?>
                         </tr>
                         <?php endforeach; ?>
+                        <?php if ($kt_tablo === 1 && $toplam_okunan_sayfa > 0): ?>
+                            <?php $genel_ortalama_ddss = sure_format_ddss((int) round($toplam_seans_tablo_saniye / $toplam_okunan_sayfa)); ?>
+                        <?php endif; ?>
                     </tbody>
                     <tfoot>
                         <tr style="font-weight: 600; background-color: #f9fafb;">
-                            <td colspan="3">Toplam</td>
+                            <?php if ($kt_tablo === 1): ?>
+                            <td colspan="2">Toplam</td>
+                            <td colspan="2"></td>
                             <td><?= $toplam_okunan_sayfa > 0 ? (int) $toplam_okunan_sayfa : '—' ?></td>
-                            <td><?= sure_format_ssddss($toplam_saniye_kitap) ?></td>
+                            <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
                             <td><?= $genel_ortalama_ddss ?></td>
+                            <?php elseif ($kt_tablo === 2): ?>
+                            <td colspan="4">Toplam</td>
+                            <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
+                            <?php else: ?>
+                            <td colspan="5">Toplam (seans süreleri)</td>
+                            <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
+                            <?php endif; ?>
                         </tr>
                     </tfoot>
                 </table>

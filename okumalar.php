@@ -123,13 +123,18 @@ $gunlere_gore = [];
 foreach ($okumalar as $o) {
     $gun = date('Y-m-d', strtotime($o['baslama']));
     if (!isset($gunlere_gore[$gun])) {
-        $gunlere_gore[$gun] = ['toplam_saniye' => 0, 'toplam_sayfa' => 0, 'seanslar' => []];
+        $gunlere_gore[$gun] = ['toplam_saniye' => 0, 'toplam_sayfa' => 0, 'toplam_oynatilan' => 0, 'seanslar' => []];
     }
     $gunlere_gore[$gun]['toplam_saniye'] += (int) ($o['sure_saniye'] ?? 0);
     if ($tip === 1) {
         $sayfa_adedi = (int)($o['bitis_sayfasi'] ?? 0) - (int)($o['baslama_sayfasi'] ?? 0) + 1;
         if ($sayfa_adedi < 1) $sayfa_adedi = 0;
         $gunlere_gore[$gun]['toplam_sayfa'] += $sayfa_adedi;
+    }
+    if ($tip === 3) {
+        $k0 = (int)($o['baslama_sure_saniye'] ?? 0);
+        $k1 = (int)($o['bitis_sure_saniye'] ?? 0);
+        $gunlere_gore[$gun]['toplam_oynatilan'] += max(0, $k1 - $k0);
     }
     $gunlere_gore[$gun]['seanslar'][] = $o;
 }
@@ -281,7 +286,11 @@ function sure_format_ddss($saniye) {
                         <?php elseif ($tip === 2): ?>
                             | <?= count($veri['seanslar']) ?> seans
                         <?php elseif ($tip === 3): ?>
-                            | <?= count($veri['seanslar']) ?> kayıt
+                            | <?= count($veri['seanslar']) ?> seans
+                            <?php $gun_oyn = (int)($veri['toplam_oynatilan'] ?? 0); ?>
+                            <?php if ($gun_oyn > 0): ?>
+                                | Oynatılan: <?= sure_format_ssddss($gun_oyn) ?>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </span>
                 </div>
@@ -303,8 +312,13 @@ function sure_format_ddss($saniye) {
                                     <th>Bitiş %</th>
                                     <th>Süre</th>
                                 <?php else: ?>
-                                    <th>Konum</th>
-                                    <th>Toplam içinde %</th>
+                                    <th>Seans başlangıç</th>
+                                    <th>Seans bitiş</th>
+                                    <th>Konum (baş)</th>
+                                    <th>Konum (bit)</th>
+                                    <th>Oynatılan</th>
+                                    <th>Seans süresi</th>
+                                    <th>İlerleme %</th>
                                 <?php endif; ?>
                             </tr>
                         </thead>
@@ -328,7 +342,13 @@ function sure_format_ddss($saniye) {
                                             <div class="cover-thumb-placeholder">—</div>
                                         <?php endif; ?>
                                     </td>
+                                    <?php if ($tip !== 3): ?>
                                     <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                                    <?php endif; ?>
+                                    <?php if ($tip === 3): ?>
+                                    <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
+                                    <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
+                                    <?php endif; ?>
                                     <td>
                                         <a href="kitap.php?id=<?= (int)($o['book_id'] ?? 0) ?>"><?= htmlspecialchars($o['kitap_baslik'] ?? '—') ?></a>
                                     </td>
@@ -342,8 +362,14 @@ function sure_format_ddss($saniye) {
                                         <td><?= isset($o['baslama_yuzde']) && $o['baslama_yuzde'] !== null ? number_format((float)$o['baslama_yuzde'], 1) . '%' : '—' ?></td>
                                         <td><?= isset($o['bitis_yuzde']) && $o['bitis_yuzde'] !== null ? number_format((float)$o['bitis_yuzde'], 1) . '%' : '—' ?></td>
                                         <td><?= sure_format_ssddss($o['sure_saniye'] ?? 0) ?></td>
-                                    <?php else: ?>
+                                    <?php else:
+                                        $bass = (int)($o['baslama_sure_saniye'] ?? 0);
+                                        $delta_o = max(0, $bs - $bass);
+                                    ?>
+                                        <td><?= sure_format_ssddss($bass) ?></td>
                                         <td><?= $bs > 0 ? sure_format_ssddss($bs) : '—' ?></td>
+                                        <td><?= $delta_o > 0 ? sure_format_ssddss($delta_o) : '—' ?></td>
+                                        <td><?= sure_format_ssddss((int)($o['sure_saniye'] ?? 0)) ?></td>
                                         <td><?= $sesli_pct !== null ? '%' . $sesli_pct : '—' ?></td>
                                     <?php endif; ?>
                                 </tr>
@@ -360,8 +386,11 @@ function sure_format_ddss($saniye) {
                                     <td colspan="4">Toplam</td>
                                     <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
                                 <?php else: ?>
-                                    <td colspan="4">Toplam</td>
+                                    <?php $gun_oyn_f = (int)($veri['toplam_oynatilan'] ?? 0); ?>
+                                    <td colspan="6">Toplam</td>
+                                    <td><?= $gun_oyn_f > 0 ? sure_format_ssddss($gun_oyn_f) : '—' ?></td>
                                     <td><?= sure_format_ssddss($veri['toplam_saniye']) ?></td>
+                                    <td>—</td>
                                 <?php endif; ?>
                             </tr>
                         </tfoot>

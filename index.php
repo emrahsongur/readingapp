@@ -22,7 +22,7 @@ $user_id = $_SESSION['user_id'];
 try {
     $stmt = $pdo->prepare("
         SELECT k.*, d.durum as durum_adi, kt.ad as kitap_tipi_adi,
-               o.ilk_baslama, o.son_sayfa, o.toplam_saniye, o.son_seans_baslama, o.toplam_okunan_sayfa,
+               o.ilk_baslama, o.son_okuma_bitis, o.son_sayfa, o.toplam_saniye, o.son_seans_baslama, o.toplam_okunan_sayfa,
                o.son_yuzde, o.son_sure_saniye,
                COALESCE(al.alinti_sayisi, 0) as alinti_sayisi,
                COALESCE(du.dusunce_sayisi, 0) as dusunce_sayisi
@@ -32,6 +32,7 @@ try {
         LEFT JOIN (
             SELECT book_id,
                    MIN(baslama) as ilk_baslama,
+                   MAX(bitis) as son_okuma_bitis,
                    MAX(bitis_sayfasi) as son_sayfa,
                    SUM(sure_saniye) as toplam_saniye,
                    MAX(baslama) as son_seans_baslama,
@@ -45,10 +46,48 @@ try {
         LEFT JOIN (SELECT kitap_id, COUNT(*) as alinti_sayisi FROM alintilar GROUP BY kitap_id) al ON k.id = al.kitap_id
         LEFT JOIN (SELECT kitap_id, COUNT(*) as dusunce_sayisi FROM dusunceler GROUP BY kitap_id) du ON k.id = du.kitap_id
         WHERE k.user_id = :user_id
-        ORDER BY (o.son_seans_baslama IS NULL), o.son_seans_baslama DESC, k.id DESC
+        ORDER BY k.id DESC
     ");
     $stmt->execute(['user_id' => $user_id]);
-    $kitaplar = $stmt->fetchAll();
+    $kitaplar_ham = $stmt->fetchAll();
+
+    $ana_okuyor = [];
+    $ana_plan = [];
+    $ana_bitti = [];
+    foreach ($kitaplar_ham as $k) {
+        $d = (int)($k['durum_id'] ?? 0);
+        if ($d === 2) {
+            $ana_okuyor[] = $k;
+        } elseif ($d === 1 || $d === 4) {
+            $ana_plan[] = $k;
+        } elseif ($d === 3) {
+            $ana_bitti[] = $k;
+        } else {
+            $ana_plan[] = $k;
+        }
+    }
+    $ana_son_ts = function ($row) {
+        $s = $row['son_seans_baslama'] ?? null;
+        return ($s !== null && $s !== '') ? strtotime($s) : 0;
+    };
+    usort($ana_okuyor, function ($a, $b) use ($ana_son_ts) {
+        $c = $ana_son_ts($b) <=> $ana_son_ts($a);
+        return $c !== 0 ? $c : ((int)$b['id'] <=> (int)$a['id']);
+    });
+    usort($ana_plan, function ($a, $b) {
+        return (int)$b['id'] <=> (int)$a['id'];
+    });
+    usort($ana_bitti, function ($a, $b) {
+        $ta = !empty($a['son_okuma_bitis']) ? strtotime($a['son_okuma_bitis']) : 0;
+        $tb = !empty($b['son_okuma_bitis']) ? strtotime($b['son_okuma_bitis']) : 0;
+        $c = $tb <=> $ta;
+        return $c !== 0 ? $c : ((int)$b['id'] <=> (int)$a['id']);
+    });
+    $kitap_bolumleri = [
+        ['baslik' => 'Şu an okunanlar', 'liste' => $ana_okuyor],
+        ['baslik' => 'Okunması planlananlar', 'liste' => $ana_plan],
+        ['baslik' => 'Bitmiş kitaplar', 'liste' => $ana_bitti],
+    ];
 } catch (PDOException $e) {
     die("Veritabanı hatası: " . $e->getMessage());
 }
@@ -185,6 +224,13 @@ function sure_format_ssddss($saniye) {
             font-size: 0.75rem;
             color: #4b5563;
         }
+        .book-meta-bitti {
+            margin-top: 0.45rem;
+            font-size: 0.72rem;
+            color: #6b7280;
+            line-height: 1.35;
+        }
+        .book-meta-bitti div { font-variant-numeric: tabular-nums; }
         .progress-bar-wrap {
             height: 6px;
             background: #e5e7eb;
@@ -225,6 +271,17 @@ function sure_format_ssddss($saniye) {
             padding: 3rem;
             color: #6b7280;
         }
+        .ana-bolum-baslik {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #374151;
+            margin: 1.75rem 0 1rem 0;
+            padding-bottom: 0.35rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .ana-bolum-baslik:first-of-type {
+            margin-top: 0;
+        }
     </style>
 </head>
 <body>
@@ -233,10 +290,13 @@ function sure_format_ssddss($saniye) {
 
 <div class="container">
 
-    <?php if (count($kitaplar) > 0): ?>
+    <?php if (count($kitaplar_ham) > 0): ?>
         <?php $toplam_tahmini_saniye = 0; ?>
-        <div class="book-grid">
-            <?php foreach ($kitaplar as $kitap): ?>
+        <?php foreach ($kitap_bolumleri as $bolum): ?>
+            <?php if (count($bolum['liste']) < 1) { continue; } ?>
+            <h2 class="ana-bolum-baslik"><?= htmlspecialchars($bolum['baslik']) ?></h2>
+            <div class="book-grid">
+            <?php foreach ($bolum['liste'] as $kitap): ?>
                 <?php
                 $tip_id = (int)($kitap['kitap_tipi_id'] ?? 1);
                 $sayfa = (int) $kitap['sayfa'];
@@ -314,6 +374,21 @@ function sure_format_ssddss($saniye) {
                     </div>
                     <div class="book-title"><a href="kitap.php?id=<?= (int)$kitap['id'] ?>"><?= htmlspecialchars($kitap['baslik']) ?></a></div>
                     <div class="book-author"><?= htmlspecialchars($kitap['yazar']) ?></div>
+                    <?php if ((int)$kitap['durum_id'] === 3): ?>
+                        <div class="book-meta book-meta-bitti">
+                            <?php
+                            $baslangic_tarih = !empty($kitap['ilk_baslama']) ? date('d.m.Y', strtotime($kitap['ilk_baslama'])) : '';
+                            $bitis_tarih = !empty($kitap['son_okuma_bitis']) ? date('d.m.Y', strtotime($kitap['son_okuma_bitis'])) : '';
+                            ?>
+                            <?php if ($baslangic_tarih !== '' && $bitis_tarih !== ''): ?>
+                                <div><?= $baslangic_tarih ?>-<?= $bitis_tarih ?></div>
+                            <?php elseif ($baslangic_tarih !== ''): ?>
+                                <div><?= $baslangic_tarih ?></div>
+                            <?php elseif ($bitis_tarih !== ''): ?>
+                                <div><?= $bitis_tarih ?></div>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                     <?php if ((int)$kitap['durum_id'] === 2): ?>
                         <div class="progress-bar-wrap" title="<?= $yuzde ?>% okundu">
                             <div class="progress-bar-fill" style="width: <?= $yuzde ?>%;"></div>
@@ -338,7 +413,8 @@ function sure_format_ssddss($saniye) {
                     <?php endif; ?>
                 </div>
             <?php endforeach; ?>
-        </div>
+            </div>
+        <?php endforeach; ?>
         <?php if ($toplam_tahmini_saniye > 0): ?>
         <div class="toplam-kalan-wrap">
             <span class="toplam-kalan-label">Toplam kalan okuma süresi:</span>
