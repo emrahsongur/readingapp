@@ -440,9 +440,9 @@ $kitap_bitti = (int)($kitap['durum_id'] ?? 0) === 3;
     let startTime = null;           // Şu anki parçanın başlangıcı (ms)
     let pausedAccumulatedSeconds = 0;
     let timerInterval = null;
-    let isRunning = false;
+    isRunning = false;
     let wakeLock = null;
-    let timerPausedByModal = false;
+    timerPausedByModal = false;
 
     function getCurrentSeconds() {
         if (!isRunning || startTime === null) return pausedAccumulatedSeconds;

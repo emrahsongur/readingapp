@@ -12,7 +12,7 @@ $user_id = $_SESSION['user_id'];
 $hata_mesaji = '';
 $basari_mesaji = '';
 
-// --- ALINTI / DÜŞÜNCE POST AKSİYONLARI (kitap_id ile yönlendirme) ---
+// --- ALINTI / DÜŞÜNCE / SEANS POST AKSİYONLARI (kitap_id ile yönlendirme) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     $redirect_kitap_id = isset($_POST['kitap_id']) ? (int)$_POST['kitap_id'] : 0;
@@ -68,6 +68,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         );
     } elseif ($action === 'dusunce_sil') {
         $err = dusunce_sil($pdo, $user_id, (int)($_POST['dusunce_id'] ?? 0));
+    } elseif ($action === 'okuma_seans_sil') {
+        $okuma_id = (int)($_POST['okuma_id'] ?? 0);
+        if ($okuma_id < 1) {
+            $err = 'Geçersiz seans.';
+        } else {
+            $delOku = $pdo->prepare("DELETE FROM okumalar WHERE id = ? AND book_id = ? AND user_id = ?");
+            $delOku->execute([$okuma_id, $redirect_kitap_id, $user_id]);
+            if ($delOku->rowCount() < 1) {
+                $err = 'Seans bulunamadı veya silinemedi.';
+            }
+        }
+    } elseif ($action === 'okuma_seans_guncelle') {
+        $okuma_id = (int)($_POST['okuma_id'] ?? 0);
+        if ($okuma_id < 1) {
+            $err = 'Geçersiz seans.';
+        } elseif (!$kitap_tip_row) {
+            $err = 'Kitap bulunamadı.';
+        } else {
+            $tip_id = (int)$kitap_tip_row['kitap_tipi_id'];
+            $stmtSeans = $pdo->prepare("SELECT id, baslama, bitis FROM okumalar WHERE id = ? AND book_id = ? AND user_id = ? LIMIT 1");
+            $stmtSeans->execute([$okuma_id, $redirect_kitap_id, $user_id]);
+            $seans = $stmtSeans->fetch(PDO::FETCH_ASSOC);
+            if (!$seans) {
+                $err = 'Seans bulunamadı.';
+            } else {
+                $sure_manual = isset($_POST['sure_saniye']) ? trim((string)$_POST['sure_saniye']) : '';
+                if ($sure_manual !== '') {
+                    $sure_saniye = max(0, (int)$sure_manual);
+                } else {
+                    $b1 = !empty($seans['baslama']) ? strtotime($seans['baslama']) : false;
+                    $b2 = !empty($seans['bitis']) ? strtotime($seans['bitis']) : false;
+                    $sure_saniye = ($b1 !== false && $b2 !== false && $b2 >= $b1) ? (int)($b2 - $b1) : 0;
+                }
+
+                if ($tip_id === 1) {
+                    $bs = (int)($_POST['baslama_sayfasi'] ?? 0);
+                    $bt_raw = isset($_POST['bitis_sayfasi']) ? trim((string)$_POST['bitis_sayfasi']) : '';
+                    $bt = $bt_raw === '' ? null : (int)$bt_raw;
+                    if ($bs < 1) {
+                        $err = 'Başlama sayfası en az 1 olmalı.';
+                    } elseif ($bt !== null && $bt < $bs) {
+                        $err = 'Bitiş sayfası başlangıçtan küçük olamaz.';
+                    } else {
+                        $upd = $pdo->prepare("UPDATE okumalar SET baslama_sayfasi = ?, bitis_sayfasi = ?, sure_saniye = ? WHERE id = ? AND book_id = ? AND user_id = ?");
+                        $upd->execute([$bs, $bt, $sure_saniye, $okuma_id, $redirect_kitap_id, $user_id]);
+                    }
+                } elseif ($tip_id === 2) {
+                    $by = (float)($_POST['baslama_yuzde'] ?? 0);
+                    $biy = (float)($_POST['bitis_yuzde'] ?? 0);
+                    if ($by < 0 || $by > 100 || $biy < 0 || $biy > 100) {
+                        $err = 'Yüzde değerleri 0-100 arasında olmalı.';
+                    } elseif ($biy < $by) {
+                        $err = 'Bitiş yüzdesi başlangıç yüzdesinden küçük olamaz.';
+                    } else {
+                        $upd = $pdo->prepare("UPDATE okumalar SET baslama_yuzde = ?, bitis_yuzde = ?, sure_saniye = ? WHERE id = ? AND book_id = ? AND user_id = ?");
+                        $upd->execute([$by, $biy, $sure_saniye, $okuma_id, $redirect_kitap_id, $user_id]);
+                    }
+                } else {
+                    $bsn = (int)($_POST['baslama_sure_saniye'] ?? 0);
+                    $btn = (int)($_POST['bitis_sure_saniye'] ?? 0);
+                    if ($bsn < 0 || $btn < 0) {
+                        $err = 'Konum değerleri negatif olamaz.';
+                    } elseif ($btn < $bsn) {
+                        $err = 'Bitiş konumu başlangıç konumundan küçük olamaz.';
+                    } else {
+                        $upd = $pdo->prepare("UPDATE okumalar SET baslama_sure_saniye = ?, bitis_sure_saniye = ?, sure_saniye = ? WHERE id = ? AND book_id = ? AND user_id = ?");
+                        $upd->execute([$bsn, $btn, $sure_saniye, $okuma_id, $redirect_kitap_id, $user_id]);
+                    }
+                }
+            }
+        }
     }
     $q = $err ? '&alinti_hata=' . urlencode($err) : '';
     header("Location: kitap.php?id=" . $redirect_kitap_id . $q);
@@ -813,12 +884,14 @@ function kitap_richtext_html($html) {
                             <th>Okunan sayfa</th>
                             <th>Süre</th>
                             <th>Sayfa başı</th>
+                            <th>İşlem</th>
                             <?php elseif ($kt_tablo === 2): ?>
                             <th>Seans başlangıç</th>
                             <th>Seans bitiş</th>
                             <th>Başlangıç %</th>
                             <th>Bitiş %</th>
                             <th>Süre</th>
+                            <th>İşlem</th>
                             <?php else: ?>
                             <th>Seans başlangıç</th>
                             <th>Seans bitiş</th>
@@ -826,6 +899,7 @@ function kitap_richtext_html($html) {
                             <th>Konum (bit)</th>
                             <th>Oynatılan</th>
                             <th>Seans süresi</th>
+                            <th>İşlem</th>
                             <?php endif; ?>
                         </tr>
                     </thead>
@@ -844,6 +918,7 @@ function kitap_richtext_html($html) {
                             }
                         ?>
                         <tr>
+                            <?php $okuma_json = htmlspecialchars(json_encode($o, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8'); ?>
                             <?php if ($kt_tablo === 1): ?>
                             <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
                             <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
@@ -852,12 +927,14 @@ function kitap_richtext_html($html) {
                             <td><?= $sayfa_adedi ?></td>
                             <td><?= sure_format_ssddss($seans_sure_row) ?></td>
                             <td><?= $sayfa_basi_ddss ?></td>
+                            <td><a href="#" class="btn-link" data-okuma-json="<?= $okuma_json ?>" onclick="openOkumaSeansModal(this); return false;">Düzenle</a></td>
                             <?php elseif ($kt_tablo === 2): ?>
                             <td><?= date('d.m.Y H:i', strtotime($o['baslama'])) ?></td>
                             <td><?= !empty($o['bitis']) ? date('d.m.Y H:i', strtotime($o['bitis'])) : '—' ?></td>
                             <td><?= isset($o['baslama_yuzde']) && $o['baslama_yuzde'] !== null ? number_format((float)$o['baslama_yuzde'], 1) . '%' : '—' ?></td>
                             <td><?= isset($o['bitis_yuzde']) && $o['bitis_yuzde'] !== null ? number_format((float)$o['bitis_yuzde'], 1) . '%' : '—' ?></td>
                             <td><?= sure_format_ssddss($seans_sure_row) ?></td>
+                            <td><a href="#" class="btn-link" data-okuma-json="<?= $okuma_json ?>" onclick="openOkumaSeansModal(this); return false;">Düzenle</a></td>
                             <?php else:
                                 $bs = (int)($o['baslama_sure_saniye'] ?? 0);
                                 $bt = (int)($o['bitis_sure_saniye'] ?? 0);
@@ -869,6 +946,7 @@ function kitap_richtext_html($html) {
                             <td><?= sure_format_ssddss($bt) ?></td>
                             <td><?= sure_format_ssddss($delta_k) ?></td>
                             <td><?= sure_format_ssddss($seans_sure_row) ?></td>
+                            <td><a href="#" class="btn-link" data-okuma-json="<?= $okuma_json ?>" onclick="openOkumaSeansModal(this); return false;">Düzenle</a></td>
                             <?php endif; ?>
                         </tr>
                         <?php endforeach; ?>
@@ -884,12 +962,15 @@ function kitap_richtext_html($html) {
                             <td><?= $toplam_okunan_sayfa > 0 ? (int) $toplam_okunan_sayfa : '—' ?></td>
                             <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
                             <td><?= $genel_ortalama_ddss ?></td>
+                            <td></td>
                             <?php elseif ($kt_tablo === 2): ?>
                             <td colspan="4">Toplam</td>
                             <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
+                            <td></td>
                             <?php else: ?>
                             <td colspan="5">Toplam (seans süreleri)</td>
                             <td><?= sure_format_ssddss($toplam_seans_tablo_saniye) ?></td>
+                            <td></td>
                             <?php endif; ?>
                         </tr>
                     </tfoot>
@@ -1179,6 +1260,66 @@ function kitap_richtext_html($html) {
         </form>
     </div>
 </div>
+<!-- Modal: Okuma Seansı Düzenle -->
+<div id="modal-okuma-seans" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeModal('modal-okuma-seans')">&times;</span>
+        <h3>Seans Düzenle</h3>
+        <form method="post" action="kitap.php" id="form-okuma-seans">
+            <input type="hidden" name="action" value="okuma_seans_guncelle">
+            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+            <input type="hidden" name="okuma_id" id="okuma_seans_id" value="">
+
+            <div id="okuma-seans-basili" style="display:none;">
+                <div class="form-group">
+                    <label>Başlama sayfası</label>
+                    <input type="number" name="baslama_sayfasi" id="okuma_baslama_sayfasi" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Bitiş sayfası</label>
+                    <input type="number" name="bitis_sayfasi" id="okuma_bitis_sayfasi" min="1">
+                </div>
+            </div>
+
+            <div id="okuma-seans-ekitap" style="display:none;">
+                <div class="form-group">
+                    <label>Başlangıç %</label>
+                    <input type="number" name="baslama_yuzde" id="okuma_baslama_yuzde" min="0" max="100" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label>Bitiş %</label>
+                    <input type="number" name="bitis_yuzde" id="okuma_bitis_yuzde" min="0" max="100" step="0.1">
+                </div>
+            </div>
+
+            <div id="okuma-seans-sesli" style="display:none;">
+                <div class="form-group">
+                    <label>Konum (baş) saniye</label>
+                    <input type="number" name="baslama_sure_saniye" id="okuma_baslama_sure_saniye" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Konum (bit) saniye</label>
+                    <input type="number" name="bitis_sure_saniye" id="okuma_bitis_sure_saniye" min="0">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Seans süresi (sn) — boş bırakılırsa otomatik</label>
+                <input type="number" name="sure_saniye" id="okuma_sure_saniye" min="0" placeholder="Boş bırak: bitiş-başlangıç zaman farkı">
+            </div>
+
+            <button type="submit" class="btn btn-primary">Güncelle</button>
+            <button type="button" class="btn btn-cancel" onclick="closeModal('modal-okuma-seans')">İptal</button>
+        </form>
+
+        <form method="post" action="kitap.php" id="form-okuma-seans-sil" style="margin-top:0.5rem;" onsubmit="return confirm('Bu seansı tamamen silmek istediğinize emin misiniz?');">
+            <input type="hidden" name="action" value="okuma_seans_sil">
+            <input type="hidden" name="kitap_id" value="<?= $kitap_id ?>">
+            <input type="hidden" name="okuma_id" id="okuma_seans_id_sil" value="">
+            <button type="submit" class="btn btn-danger">Seansı Sil</button>
+        </form>
+    </div>
+</div>
 <!-- Modal: PDF / Yazdır (alıntılar ve düşünceler) -->
 <div id="modal-pdf" class="modal" style="display:none;">
     <div class="modal-content">
@@ -1280,6 +1421,36 @@ function toggleAccordion(id) {
         head.setAttribute('aria-expanded', !isOpen ? 'true' : 'false');
         toggle.textContent = body.classList.contains('open') ? '▲' : '▼';
     }
+}
+var kitapTipiMevcut = <?= isset($kitap) ? (int)($kitap['kitap_tipi_id'] ?? 1) : 1 ?>;
+function openOkumaSeansModal(el) {
+    var raw = el && el.getAttribute('data-okuma-json') ? el.getAttribute('data-okuma-json') : '';
+    if (!raw) return;
+    var o = {};
+    try { o = JSON.parse(raw); } catch (e) { return; }
+
+    document.getElementById('okuma_seans_id').value = o.id || '';
+    document.getElementById('okuma_seans_id_sil').value = o.id || '';
+    document.getElementById('okuma_sure_saniye').value = (o.sure_saniye !== null && o.sure_saniye !== undefined) ? o.sure_saniye : '';
+
+    var basiliWrap = document.getElementById('okuma-seans-basili');
+    var ekitapWrap = document.getElementById('okuma-seans-ekitap');
+    var sesliWrap = document.getElementById('okuma-seans-sesli');
+    basiliWrap.style.display = kitapTipiMevcut === 1 ? '' : 'none';
+    ekitapWrap.style.display = kitapTipiMevcut === 2 ? '' : 'none';
+    sesliWrap.style.display = kitapTipiMevcut === 3 ? '' : 'none';
+
+    if (kitapTipiMevcut === 1) {
+        document.getElementById('okuma_baslama_sayfasi').value = o.baslama_sayfasi || '';
+        document.getElementById('okuma_bitis_sayfasi').value = (o.bitis_sayfasi !== null && o.bitis_sayfasi !== undefined) ? o.bitis_sayfasi : '';
+    } else if (kitapTipiMevcut === 2) {
+        document.getElementById('okuma_baslama_yuzde').value = (o.baslama_yuzde !== null && o.baslama_yuzde !== undefined) ? o.baslama_yuzde : '';
+        document.getElementById('okuma_bitis_yuzde').value = (o.bitis_yuzde !== null && o.bitis_yuzde !== undefined) ? o.bitis_yuzde : '';
+    } else {
+        document.getElementById('okuma_baslama_sure_saniye').value = o.baslama_sure_saniye || 0;
+        document.getElementById('okuma_bitis_sure_saniye').value = o.bitis_sure_saniye || 0;
+    }
+    openModal('modal-okuma-seans');
 }
 function openPdfModal() {
     openModal('modal-pdf');
